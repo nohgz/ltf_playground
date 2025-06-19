@@ -36,6 +36,23 @@ def lorentz_matrix_x_4v(eta):
     in the x-hat direction."""
     return lorentz_matrix_x_3v(to_three_velocity(eta))
 
+def lorentz_matrix_z_3v(v):
+    """Returns the **Lorentz transformation matrix** given a three-velocity only
+    in the z-hat direction."""
+    beta = norm(v) / 3E8
+    gamma = gamma_3v(norm(v))
+    return np.array([
+        [gamma, 0, 0, -gamma*beta],
+        [ 0, 1, 0, 0],
+        [ 0, 0, 1, 0],
+        [-gamma*beta, 0, 0, gamma]
+    ])
+
+def lorentz_matrix_z_4v(eta):
+    """Returns the **Lorentz transformation matrix** given a four-velocity only
+    in the z-hat direction."""
+    return lorentz_matrix_z_3v(to_three_velocity(eta))
+
 def check_vel_3v(vel_3v):
     """Checks velocity to ensure that we're not going above c."""
     if norm(vel_3v) > 3E8:
