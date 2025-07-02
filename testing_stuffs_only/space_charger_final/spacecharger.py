@@ -30,8 +30,10 @@ collected_data = {}
 class MainConfig:
     DEBUG: bool
     INTEGRATOR: str
+    SHOW_GAUSSIAN_FIT: bool
     SAVE_PLOTS: bool
     OUT_PATH: str
+    SEED_RNG: bool
 
 @dataclass
 class BunchConfig:
@@ -163,6 +165,19 @@ class BunchParticle():
 
 
 # >>> FILE PARSING >>>
+def get_input_filepath():
+    if len(sys.argv) < 2:
+        print("Usage: python spacecharger.py <input_file.py>")
+        sys.exit(1)
+
+    input_file = sys.argv[1]
+
+    if not os.path.isfile(input_file):
+        print(f"Error: File '{input_file}' not found.")
+        sys.exit(1)
+
+    return input_file
+
 def record_block(name):
     def handler(**kwargs):
         collected_data[name] = kwargs
@@ -243,8 +258,9 @@ def closestVal(val, array, dx = None):
     return int((val - array[0])/dx)
 # <<< HELPER FUNCTIONS <<<
 
-if __name__ == '__main__':
-    config = parse_input_file('test_input.py')
+def routine():
+    input_path = get_input_filepath()
+    config = parse_input_file(input_path)
 
     # Parse Inputs
     main = MainConfig(**collected_data["Main"])
@@ -275,6 +291,10 @@ if __name__ == '__main__':
     )
     log = logging.info
 
+    # seed RNG if needed
+    if main.SEED_RNG:
+        np.random.seed(6969) # haha funny
+
     ###
     # STEP 1: Initialize the particle array
     ###
@@ -287,7 +307,7 @@ if __name__ == '__main__':
         # and give them a whole lot of positions
         parts.append(BunchParticle(
             Electron,
-            # generate a velocity that is clamped
+            # generate a velocity that is clamped to c
             v0_3v=[0, 0, np.clip(np.random.normal(bunch.MU_VEL, bunch.SIG_VEL),0,c)],
             pos0_3v=[0 ,0, np.random.normal(bunch.MU_POS, bunch.SIG_POS)]
             ))
@@ -302,6 +322,9 @@ if __name__ == '__main__':
     # get the velocity and position of the reference particle
     lab_ref_vel = np.mean(lab_particle_vel, axis=0)[0]
     lab_ref_pos = np.mean(lab_particle_pos, axis=0)
+
+    # get the bunch length in the lab frame
+    lab_bunch_len = max(lab_particle_pos[:,2]) - min(lab_particle_pos[:,2])
 
     # create reference particle
     reference = BunchParticle(Reference, v0_3v = lab_ref_vel, pos0_3v = lab_ref_pos)
@@ -331,16 +354,14 @@ if __name__ == '__main__':
     ###
 
     log("GET CHARGE DENSITY...")
-    # now, I can get the number density of the particles at a certain position
-    lb_mgf = mg.MultiGaussFit(
-        lb_particle_pos[:,2],
-        nbins=50,
-        ngaussians=50,
-        width=.00005
-        )
 
-    # i'll translate this into a charge density
-    charge_density = lb_mgf.scale_by_factor(Electron.CHARGE.value)
+    xGauss, ampGauss, sigGauss = mg.fit_gaussian_density(
+       lb_particle_pos[:,2],
+        nbins=gauss.NUM_BINS,
+        ngaussians=gauss.NUM_GAUSSIANS,
+        width=gauss.WIDTH_GAUSSIANS,
+        plot=main.SHOW_GAUSSIAN_FIT,
+        scale=Electron.CHARGE.value)
 
     ###
     # STEP 4: Obtain the Longitudinal & Transverse Electric fields
@@ -351,7 +372,8 @@ if __name__ == '__main__':
     ###
 
     log("CONSTRUCTING MESHES...")
-    bunch_len = charge_density.bins[-1] - charge_density.bins[0]
+
+    bunch_len = max(lb_particle_pos[:,2]) - min(lb_particle_pos[:,2])
 
     tran_mesh, d_tran = np.linspace(
         start   = -bunch.RADIUS,
@@ -375,28 +397,27 @@ if __name__ == '__main__':
     z_mesh = long_mesh
 
     ### EVALUATE!!! ###
-    lb_efld_cyl = np.zeros((len(x_mesh), len(y_mesh), len(z_mesh), 3), dtype=np.float64)
+    gauss_params = {
+        "xGauss": xGauss,
+        "ampGauss": ampGauss,
+        "sigGauss": sigGauss
+    }
 
-    total_iterations = len(z_mesh) * len(y_mesh)
+    lb_efld_cyl = ltsolvers.solve_SCFields(
+        bunch_rad=bunch.RADIUS,
+        bunch_len=bunch_len,
+        co_mesh=(x_mesh, y_mesh, z_mesh),
+        rho_type=bunch.DISTRIBUTION.lower(),
+        integrator=main.INTEGRATOR.lower(),
+        n=mesh.QUAD_PTS,
+        gauss_params=gauss_params
+    )
 
-    with tqdm.tqdm(total=total_iterations, desc="Computing Field") as pbar:
-        for i_z, z in enumerate(z_mesh):
-            for i_y, y in enumerate(y_mesh):
-                for i_x, x in enumerate(x_mesh):
-                    lb_efld_cyl[i_x, i_y, i_z] = ltsolvers.call_jit_scField(
-                        field_pt=np.array([x, y, z]),
-                        bunch_rad=bunch.RADIUS,
-                        bunch_len=bunch_len,
-                        n=mesh.QUAD_PTS,
-                        rho=charge_density,
-                        integrator=main.INTEGRATOR
-                    )
-                pbar.update(1)
-
+    # save the comoving eflds
     if main.SAVE_PLOTS:
-        file_name = "eflds"
+        file_name = "co_eflds"
         file_path = os.path.join(output_dir, file_name + ".png")
-        log(f"SAVING PLOTS TO \"{file_path}\"...")
+        log(f"SAVING CO-MOVING E-FIELD PLOTS TO \"{file_path}\"...")
 
         idx = closestVal(bunch.RADIUS, x_mesh)
         idy = closestVal(0, y_mesh)
@@ -407,21 +428,21 @@ if __name__ == '__main__':
         # Radial Efld
         axs[0].grid()
         axs[0].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
-        axs[0].axvspan(-bunch_len/2, bunch_len/2, alpha=0.2, label='Bunch Length')
+        axs[0].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
         axs[0].plot(z_mesh, lb_efld_cyl[idx, idy, :][:, 0], '.-', label="Radial Electric Field")
         axs[0].set_xlabel("Longitudinal Distance $z$ (m)")
         axs[0].set_ylabel("Electric Field Magnitude (V/m)")
-        axs[0].set_title(f"Radial Electric Field ($n$ = {mesh.QUAD_PTS}) (Ref. Frame)")
+        axs[0].set_title(f"Radial Electric Field ($n$ = {mesh.QUAD_PTS}) (Co. Frame)")
         axs[0].legend()
 
         # Longitudinal Efld
         axs[1].grid(True)
         axs[1].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
         axs[1].plot(z_mesh, lb_efld_cyl[idx, idy, :][:,2], '.-', label="Longitudinal Electric Field")
-        axs[1].axvspan(-bunch_len/2, bunch_len/2, alpha=0.2, label='Bunch Area')
+        axs[1].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
         axs[1].set_xlabel("Longitudinal Distance $z$ (m)")
         axs[1].set_ylabel("Electric Field Magnitude (V/m)")
-        axs[1].set_title(f"Longitudinal Electric Field ($n$ = {mesh.QUAD_PTS}) (Ref. Frame)")
+        axs[1].set_title(f"Longitudinal Electric Field ($n$ = {mesh.QUAD_PTS}) (Co. Frame)")
         axs[1].legend()
 
         plt.tight_layout()
@@ -444,7 +465,7 @@ if __name__ == '__main__':
     X, Y = np.meshgrid(x_mesh, y_mesh, indexing='ij')
     phi = np.arctan2(Y, X)
 
-    # Compute Ex and Ey using broadcasting
+    # Compute Ex and Ey
     lb_Ex = lb_ER * np.cos(phi)[..., None]
     lb_Ey = lb_ER * np.sin(phi)[..., None]
     lb_Ez = lb_EZ
@@ -454,7 +475,7 @@ if __name__ == '__main__':
 
     log("BOOSTING FIELDS BACK TO LAB FRAME...")
 
-    # Get shape and preallocate final E and B fields
+    # Preallocate final E and B fields
     shape = lb_efld_cart.shape[:3]
     final_E = np.zeros_like(lb_efld_cart)
     final_B = np.zeros_like(lb_efld_cart)
@@ -472,9 +493,90 @@ if __name__ == '__main__':
         flat_E_boosted.append(E_tr)
         flat_B_boosted.append(B_tr)
 
+    flat_E_boosted = np.array(flat_E_boosted)
+    flat_B_boosted = np.array(flat_B_boosted)
+
+    flat_E_boosted[np.isnan(flat_E_boosted)] = 0.0
+    flat_B_boosted[np.isnan(flat_B_boosted)] = 0.0
+
     # Reshape boosted fields back
     final_E = np.reshape(flat_E_boosted, lb_efld_cart.shape)
     final_B = np.reshape(flat_B_boosted, lb_efld_cart.shape)
+
+    # scale the lab frame mesh
+    lab_z_mesh = z_mesh / fv.gamma_3v(lab_ref_vel)
+
+    # save lab frame eflds
+    if main.SAVE_PLOTS:
+        file_name = "lab_eflds"
+        file_path = os.path.join(output_dir, file_name + ".png")
+        log(f"SAVING LAB E-FIELD PLOTS TO \"{file_path}\"...")
+
+        idx = closestVal(bunch.RADIUS/np.sqrt(2), x_mesh)
+        idy = closestVal(bunch.RADIUS, y_mesh)
+        idz = closestVal(0, z_mesh)
+
+        fig, axs = plt.subplots(1,2, figsize=(14, 5))
+
+        # Radial Efld
+        axs[0].grid()
+        axs[0].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
+        axs[0].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
+        axs[0].plot(lab_z_mesh, final_E[idx, idy, :][:, 0], '.-', label="Radial Electric Field")
+        axs[0].set_xlabel("Longitudinal Distance $z$ (m)")
+        axs[0].set_ylabel("Electric Field Magnitude (V/m)")
+        axs[0].set_title(f"Radial Electric Field ($n$ = {mesh.QUAD_PTS}) (Lab. Frame)")
+        axs[0].legend()
+
+        # Longitudinal Efld
+        axs[1].grid(True)
+        axs[1].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
+        axs[1].plot(lab_z_mesh, final_E[idx, idy, :][:,2], '.-', label="Longitudinal Electric Field")
+        axs[1].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
+        axs[1].set_xlabel("Longitudinal Distance $z$ (m)")
+        axs[1].set_ylabel("Electric Field Magnitude (V/m)")
+        axs[1].set_title(f"Longitudinal Electric Field ($n$ = {mesh.QUAD_PTS}) (Lab. Frame)")
+        axs[1].legend()
+
+        plt.tight_layout()
+        plt.savefig(file_path)
+        plt.close()
+
+    # save lab B-fields
+    if main.SAVE_PLOTS:
+        file_name = "lab_bflds"
+        file_path = os.path.join(output_dir, file_name + ".png")
+        log(f"SAVING LAB B-FIELD PLOTS TO \"{file_path}\"...")
+
+        idx = closestVal(bunch.RADIUS, x_mesh)
+        idy = closestVal(0, y_mesh)
+        idz = closestVal(0, z_mesh)
+
+        fig, axs = plt.subplots(1,2, figsize=(14, 5))
+
+        # B_x
+        axs[0].grid()
+        axs[0].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
+        axs[0].plot(lab_z_mesh, final_B[idx, idy, :][:, 0], '.-', label="Horizontal Magnetic Field")
+        axs[0].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Bunch Length')
+        axs[0].set_xlabel("Longitudinal Distance $z$ (m)")
+        axs[0].set_ylabel("Magnetic Field Magnitude (T)")
+        axs[0].set_title(f"Horizontal Magnetic Field($n$ = {mesh.QUAD_PTS}) (Lab. Frame)")
+        axs[0].legend()
+
+        # B_y
+        axs[1].grid(True)
+        axs[1].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
+        axs[1].plot(lab_z_mesh, final_B[idx, idy, :][:,1], '.-', label="Vertical Magnetic Field")
+        axs[1].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Bunch Length')
+        axs[1].set_xlabel("Longitudinal Distance $z$ (m)")
+        axs[1].set_ylabel("Magnetic Field Magnitude (T)")
+        axs[1].set_title(f"Vertical Magnetic Field ($n$ = {mesh.QUAD_PTS}) (Lab. Frame)")
+        axs[1].legend()
+
+        plt.tight_layout()
+        plt.savefig(file_path)
+        plt.close()
 
     # Save to pickle
     fields_filename = f"fields_{timestamp}.pkl"
@@ -482,6 +584,20 @@ if __name__ == '__main__':
     log(f"WRITING FIELDS TO \"{fields_path}\"...")
 
     with open(fields_path, 'wb') as f:
-        pickle.dump({'E': final_E, 'B': final_B}, f)
+        pickle.dump({
+            "mesh_lab": lab_z_mesh,
+            "mesh_co": z_mesh,
+            "E_lab": final_E,
+            "B_lab": final_B,
+            "E_co": lb_efld_cart}, f)
 
     print("[ DONE ]")
+
+    # log some extra helpful information
+    log(f"GAMMA: {fv.gamma_3v(lab_ref_vel)}")
+    log(f"LAB BUNCH LEN: {lab_bunch_len}")
+    log(f"COMOVING BUNCH LEN: {bunch_len}")
+
+if __name__ == "__main__":
+    # get system args, if any
+    routine()

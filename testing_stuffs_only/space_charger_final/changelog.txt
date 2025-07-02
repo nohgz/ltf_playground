@@ -1,0 +1,18 @@
+SpaceCharger v1.1
+
+[ADDED]
+-> Toggleable fit to electric fields- attempts to smoothen out numerical noise
+-> Obtained the electric fields in both the lab mesh frame and comoving mesh frame [in progress]
+-> Added a wrapper function for users to call the whole routine for a given bunch size
+  o take particle bunch -> lorentz boost to comoving frame -> get eflds in comoving frame
+    -> boost back to lab frame and get the fields there
+
+-> new file called spacecharger_tiny.py, which is as slim as the routine will get. for use in multiple space charge field calculations
+   all it does is take in an input file and return the E and B. that's it. There aren't even prog bars!
+
+[CHANGES]
+-> Modified the multiGaussFit routine to allow for exact numbers instead of close enough numbers [DONE]
+
+[FIXES]
+-> Improved logic and speed for the quadrature rules ( 150% speedup! )
+-> Implemented different charge types, as it wasn't before. [DONE]
