@@ -1,5 +1,5 @@
 Main(
-    DEBUG = False,              # sets the RNG to be seeded, ...
+    DEBUG = False,
     INTEGRATOR = "Trapezoidal", #Can be "Trapezoidal" or "Gaussian"
     SHOW_GAUSSIAN_FIT = False,
     SAVE_PLOTS = True,
@@ -18,11 +18,11 @@ Bunch(
     RADIUS = 1E-4   # meters
 )
 
-#notes, 9 mesh points and 64 quad points seem to work decently well for
+#notes, 5 mesh points and 64 quad points seem to work decently well for
 # mu_v = 2.6E8, sig_v = 5E6, rad = 1E-4, integ = trap
 Mesh(
-    MESH_PTS = 9,
-    QUAD_PTS = 64
+    MESH_PTS = 3,
+    QUAD_PTS = 16
 )
 
 GaussFits(

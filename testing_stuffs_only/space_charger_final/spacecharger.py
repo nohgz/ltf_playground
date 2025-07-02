@@ -198,15 +198,15 @@ def parse_input_file(filepath):
 
     return collected_data
 
-def open_fields(filepath):
+def open_lab_fields(filepath):
     print(f"[LOG] OPENING FIELDS FROM {filepath}...", end="")
     # Load the fields back from the pickle file
     with open(filepath, 'rb') as f:
         loaded_data = pickle.load(f)
 
     # Retrieve the individual fields
-    E = loaded_data['E']
-    B = loaded_data['B']
+    E = loaded_data['E_lab']
+    B = loaded_data['B_lab']
 
     print("DONE")
     return E, B
@@ -512,8 +512,8 @@ def routine():
         file_path = os.path.join(output_dir, file_name + ".png")
         log(f"SAVING LAB E-FIELD PLOTS TO \"{file_path}\"...")
 
-        idx = closestVal(bunch.RADIUS/np.sqrt(2), x_mesh)
-        idy = closestVal(bunch.RADIUS, y_mesh)
+        idx = closestVal(bunch.RADIUS, x_mesh)
+        idy = closestVal(0, y_mesh)
         idz = closestVal(0, z_mesh)
 
         fig, axs = plt.subplots(1,2, figsize=(14, 5))

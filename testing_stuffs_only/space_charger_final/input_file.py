@@ -1,5 +1,5 @@
 Main(
-    DEBUG = False,              # sets the RNG to be seeded, ...
+    DEBUG = False,
     INTEGRATOR = "Trapezoidal", #Can be "Trapezoidal" or "Gaussian"
     SHOW_GAUSSIAN_FIT = False,
     SAVE_PLOTS = True,
@@ -14,14 +14,18 @@ Bunch(
     SIG_VEL = 5E6,  #m/s
     MU_POS = 0,     #meters
     SIG_POS = 1E-4, #meter
-    DISTRIBUTION = "Mesa", # can be "Uniform", "Mesa", or "Gaussian"
+    DISTRIBUTION = "Gaussian", # can be "Uniform", "Mesa", or "Gaussian"
     RADIUS = 1E-4   # meters
 )
 
-#notes, 9 mesh points and 64 quad points seem to work decently well for
+#notes, 9 mesh points and 64 quad points seem to work decently well (exec time = )
+#now 7 mesh points and 48 quad points works better and faster for
+# and now 5 and 64 looks to take the cake (exec time = ~11s)
 # mu_v = 2.6E8, sig_v = 5E6, rad = 1E-4, integ = trap
+
+#somehow, against all odds, 3 and 16 looks passable :skull:
 Mesh(
-    MESH_PTS = 9,
+    MESH_PTS = 5,
     QUAD_PTS = 64
 )
 
