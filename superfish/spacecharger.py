@@ -44,6 +44,7 @@ class BunchConfig:
     SIG_POS: float
     DISTRIBUTION: str
     RADIUS: float
+    LENGTH: float
 
 @dataclass
 class MeshConfig:
@@ -285,7 +286,9 @@ def routine(
     ###
     # STEP 4: Mesh
     ###
-    bunch_len = max(lb_particle_pos[:, 2]) - min(lb_particle_pos[:, 2])
+    if bunch.LENGTH == 0:
+        bunch.LENGTH = max(lb_particle_pos[:, 2]) - min(lb_particle_pos[:, 2])
+    
 
     tran_mesh, d_tran = np.linspace(
         start=-bunch.RADIUS,
@@ -294,7 +297,10 @@ def routine(
         retstep=True
     )
 
-    n_z = int(np.round(bunch_len / d_tran))
+
+    # mesh dimensions should be user input
+    # then add config to print the mesh plots from notebook
+    n_z = int(np.round(bunch.LENGTH / d_tran))
     if n_z % 2 == 0:
         n_z += 1
 
@@ -318,7 +324,7 @@ def routine(
 
     lb_efld_cyl = ltsolvers.solve_SCFields(
         bunch_rad=bunch.RADIUS,
-        bunch_len=bunch_len,
+        bunch_len=bunch.LENGTH,
         co_mesh=(x_mesh, y_mesh, z_mesh),
         rho_type=bunch.DISTRIBUTION.lower(),
         integrator=main.INTEGRATOR.lower(),
@@ -389,7 +395,8 @@ if __name__ == "__main__":
         MU_POS = 0,     #meters
         SIG_POS = 1E-4, #meter
         DISTRIBUTION = "Mesa", # can be "Uniform", "Mesa", or "Gaussian"
-        RADIUS = 1E-4   # meters
+        RADIUS = 1E-4,   # meters
+        LENGTH = 0 # if zero then just go from the distribution. this is recommended
     )
 
     #notes, 5 mesh points and 64 quad points seem to work decently well for
@@ -411,7 +418,3 @@ if __name__ == "__main__":
         mesh_config=mesh_config,
         gaussfits_config=gaussfits_config
     )
-
-    print(E1[1][1] - E[1][1])
-
-    print(f"ISCLOSE: {np.allclose(E, E1, rtol=0.001)}")

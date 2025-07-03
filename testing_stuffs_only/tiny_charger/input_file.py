@@ -14,15 +14,15 @@ Bunch(
     SIG_VEL = 5E6,  #m/s
     MU_POS = 0,     #meters
     SIG_POS = 1E-4, #meter
-    DISTRIBUTION = "Mesa", # can be "Uniform", "Mesa", or "Gaussian"
+    DISTRIBUTION = "Gaussian", # can be "Uniform", "Mesa", or "Gaussian"
     RADIUS = 1E-4   # meters
 )
 
 #notes, 5 mesh points and 64 quad points seem to work decently well for
 # mu_v = 2.6E8, sig_v = 5E6, rad = 1E-4, integ = trap
 Mesh(
-    MESH_PTS = 3,
-    QUAD_PTS = 16
+    MESH_PTS = 5,
+    QUAD_PTS = 64
 )
 
 GaussFits(
