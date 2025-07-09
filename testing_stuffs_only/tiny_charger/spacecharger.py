@@ -27,7 +27,6 @@ collected_data = {}
 
 @dataclass
 class MainConfig:
-    DEBUG: bool
     INTEGRATOR: str
     SHOW_GAUSSIAN_FIT: bool
     SAVE_PLOTS: bool
@@ -44,10 +43,14 @@ class BunchConfig:
     SIG_POS: float
     DISTRIBUTION: str
     RADIUS: float
+    LENGTH: float
 
 @dataclass
 class MeshConfig:
-    MESH_PTS: int
+    X_MESH_PTS: int
+    Y_MESH_PTS: int
+    Z_MESH_PTS: int
+    SHOW_MESH: bool
     QUAD_PTS: int
 
 @dataclass
@@ -211,6 +214,18 @@ def open_lab_fields(filepath):
     return E, B
 
 #<<< FILE PARSING <<<
+
+# >>> HELPER FUNCTIONS >>>
+def closestVal(val, array, dx = None):
+    if dx == None:
+        dx = array[1] - array[0]
+
+    # clip val to be in the array
+    val = np.clip(val, array[0], array[-1])
+
+    return int((val - array[0])/dx)
+# <<< HELPER FUNCTIONS <<<
+
 def routine(
     input_file: str = None,
     main_config: dict = None,
@@ -285,27 +300,51 @@ def routine(
     ###
     # STEP 4: Mesh
     ###
-    bunch_len = max(lb_particle_pos[:, 2]) - min(lb_particle_pos[:, 2])
+    
+    # stupid hacky fix if we need to manually set bunch length
+    if bunch.LENGTH == -1:
+        bunch.LENGTH = max(lb_particle_pos[:,2]) - min(lb_particle_pos[:,2])
 
-    tran_mesh, d_tran = np.linspace(
-        start=-bunch.RADIUS,
-        stop=bunch.RADIUS,
-        num=mesh.MESH_PTS,
-        retstep=True
+    # the x mesh will always be this
+    x_mesh, dx = np.linspace(
+        start   = -bunch.RADIUS,
+        stop    = bunch.RADIUS,
+        num     = mesh.X_MESH_PTS,
+        retstep = True
     )
 
-    n_z = int(np.round(bunch_len / d_tran))
-    if n_z % 2 == 0:
-        n_z += 1
+    if mesh.Y_MESH_PTS == -1:
+        y_mesh = x_mesh
+        dy = dx
+    else:
+        y_mesh, dy = np.linspace(
+                start   = -bunch.RADIUS,
+                stop    = bunch.RADIUS,
+                num     = mesh.Y_MESH_PTS,
+                retstep = True
+        )
 
-    long_mesh = np.linspace(
-        start=-(n_z // 2) * d_tran,
-        stop=+(n_z // 2) * d_tran,
-        num=n_z
-    )
+    if mesh.Z_MESH_PTS == -1: # auto set length
+        mesh.Z_MESH_PTS = int(np.round(bunch.LENGTH / dx))  # total points (approx)
 
-    x_mesh, y_mesh = tran_mesh, tran_mesh
-    z_mesh = long_mesh
+        # i need odd numbers of mesh points to center at 0
+        if mesh.Z_MESH_PTS % 2 == 0:
+            mesh.Z_MESH_PTS += 1
+
+        z_mesh = np.linspace(
+            start = - (mesh.Z_MESH_PTS // 2) * dx,
+            stop  = + (mesh.Z_MESH_PTS // 2) * dx,
+            num   = mesh.Z_MESH_PTS
+        )
+        dz = dx
+    else:
+        z_mesh, dz = np.linspace(
+                start   = - bunch.LENGTH / 2,
+                stop    = + bunch.LENGTH / 2,
+                num     = mesh.Z_MESH_PTS,
+                retstep = True
+        )
+
 
     ###
     # STEP 5: Solve fields
@@ -318,7 +357,7 @@ def routine(
 
     lb_efld_cyl = ltsolvers.solve_SCFields(
         bunch_rad=bunch.RADIUS,
-        bunch_len=bunch_len,
+        bunch_len=bunch.LENGTH,
         co_mesh=(x_mesh, y_mesh, z_mesh),
         rho_type=bunch.DISTRIBUTION.lower(),
         integrator=main.INTEGRATOR.lower(),
@@ -366,14 +405,13 @@ def routine(
 
     lab_z_mesh = z_mesh / fv.gamma_3v(lab_ref_vel)
 
-    return final_E, final_B, x_mesh, lab_z_mesh
+    return final_E, final_B, x_mesh, y_mesh, lab_z_mesh
 
 if __name__ == "__main__":
 
     """This shows how to use the alternative way of calling spacecharger- good for
     real time stuffs when the bunch is changing and we have to change the mesh up a bit."""
     main_config = dict(
-        DEBUG = False,
         INTEGRATOR = "Trapezoidal", #Can be "Trapezoidal" or "Gaussian"
         SHOW_GAUSSIAN_FIT = False,
         SAVE_PLOTS = True,
@@ -389,13 +427,17 @@ if __name__ == "__main__":
         MU_POS = 0,     #meters
         SIG_POS = 1E-4, #meter
         DISTRIBUTION = "Mesa", # can be "Uniform", "Mesa", or "Gaussian"
-        RADIUS = 1E-4   # meters
+        RADIUS = 1E-4,   # meters
+        LENGTH = -1     # set to -1 to auto infer bunch length. recommended
     )
 
     #notes, 5 mesh points and 64 quad points seem to work decently well for
     # mu_v = 2.6E8, sig_v = 5E6, rad = 1E-4, integ = trap
     mesh_config = dict(
-        MESH_PTS = 9,
+        X_MESH_PTS = 5,
+        Y_MESH_PTS = 5,   # set to -1 to set dy = dx
+        Z_MESH_PTS = 15,  # set to -1 to set dz = dx
+        SHOW_MESH = True,
         QUAD_PTS = 64
     )
 
@@ -405,13 +447,9 @@ if __name__ == "__main__":
         WIDTH_GAUSSIANS = 0.00004
     )
 
-    E, B, x, z = routine(
+    E, B, x, y, z = routine(
         main_config=main_config,
         bunch_config=bunch_config,
         mesh_config=mesh_config,
         gaussfits_config=gaussfits_config
     )
-
-    print(E1[1][1] - E[1][1])
-
-    print(f"ISCLOSE: {np.allclose(E, E1, rtol=0.001)}")

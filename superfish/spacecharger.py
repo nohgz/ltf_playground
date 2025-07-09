@@ -27,7 +27,6 @@ collected_data = {}
 
 @dataclass
 class MainConfig:
-    DEBUG: bool
     INTEGRATOR: str
     SHOW_GAUSSIAN_FIT: bool
     SAVE_PLOTS: bool
@@ -45,10 +44,14 @@ class BunchConfig:
     DISTRIBUTION: str
     RADIUS: float
     LENGTH: float
+    CHARGE: float
 
 @dataclass
 class MeshConfig:
-    MESH_PTS: int
+    X_MESH_PTS: int
+    Y_MESH_PTS: int
+    Z_MESH_PTS: int
+    SHOW_MESH: bool
     QUAD_PTS: int
 
 @dataclass
@@ -75,6 +78,12 @@ class Reference(Enum):
     MASS   = 0        #kg
     CHARGE = 0        #C
 
+class Macroparticle(Enum):
+    """A mutable particle. Initialized to nothing, as that is up to user choice."""
+    NAME   = "MACROPARTICLE"
+    MASS   = 0  # kg
+    CHARGE = 0  # C
+
 class BunchParticle():
     def __init__(
             self,
@@ -83,7 +92,9 @@ class BunchParticle():
             pos0_4v = None,  # a four-position
             v0_3v  = None,   # a three-velocity
             v0_4v  = None,   # a four-velocity
-            frame  = "LAB"   # defaults to lab frame
+            frame  = "LAB",  # defaults to lab frame
+            mass_override = None, # stupid hack for macroparticles
+            charge_override = None # stupid hack for macroparticles
         ):
 
         ### HANDLE INITIAL VELOCITIES
@@ -109,8 +120,10 @@ class BunchParticle():
 
         # Get the parameters from the species of particle
         self.name = species.NAME.value
-        self.mass = species.MASS.value
-        self.charge = species.CHARGE.value
+
+        # override mass and charge if given
+        self.mass = mass_override if mass_override is not None else species.MASS.value
+        self.charge = charge_override if charge_override is not None else species.CHARGE.value
 
         self.vel_4v = v0_4v    # four velocity
         self.pos_4v = pos0_4v  # four position
@@ -199,7 +212,6 @@ def parse_input_file(filepath):
     return collected_data
 
 def open_lab_fields(filepath):
-    print(f"[LOG] OPENING FIELDS FROM {filepath}...", end="")
     # Load the fields back from the pickle file
     with open(filepath, 'rb') as f:
         loaded_data = pickle.load(f)
@@ -208,10 +220,21 @@ def open_lab_fields(filepath):
     E = loaded_data['E_lab']
     B = loaded_data['B_lab']
 
-    print("DONE")
     return E, B
 
 #<<< FILE PARSING <<<
+
+# >>> HELPER FUNCTIONS >>>
+def closestVal(val, array, dx = None):
+    if dx == None:
+        dx = array[1] - array[0]
+
+    # clip val to be in the array
+    val = np.clip(val, array[0], array[-1])
+
+    return int((val - array[0])/dx)
+# <<< HELPER FUNCTIONS <<<
+
 def routine(
     input_file: str = None,
     main_config: dict = None,
@@ -246,12 +269,41 @@ def routine(
     # STEP 1: Initialize the particle array
     ###
     parts = []
-    for i in range(bunch.NUM_PARTICLES):
-        parts.append(BunchParticle(
-            Electron,
-            v0_3v=[0, 0, np.clip(np.random.normal(bunch.MU_VEL, bunch.SIG_VEL), 0, c)],
-            pos0_3v=[0, 0, np.random.normal(bunch.MU_POS, bunch.SIG_POS)]
-        ))
+
+    if bunch.SPECIES[0].lower == "e":
+        for i in range(bunch.NUM_PARTICLES):
+            parts.append(BunchParticle(
+                Electron,
+                v0_3v=[0, 0, np.clip(np.random.normal(bunch.MU_VEL, bunch.SIG_VEL), 0, c)],
+                pos0_3v=[0, 0, np.random.normal(bunch.MU_POS, bunch.SIG_POS)]
+            ))
+    elif bunch.SPECIES[0].lower == "p":
+        for i in range(bunch.NUM_PARTICLES):
+            parts.append(BunchParticle(
+                Proton,
+                v0_3v=[0, 0, np.clip(np.random.normal(bunch.MU_VEL, bunch.SIG_VEL), 0, c)],
+                pos0_3v=[0, 0, np.random.normal(bunch.MU_POS, bunch.SIG_POS)]
+            ))
+    else: #use macroparticle
+        p_charge = bunch.CHARGE/bunch.NUM_PARTICLES
+        p_mass = abs(p_charge/Electron.CHARGE.value)*Electron.MASS.value
+        print(f"num macros:{bunch.NUM_PARTICLES}, charge macros: {p_charge}")
+        for i in range(bunch.NUM_PARTICLES):
+            parts.append(BunchParticle(
+                Macroparticle,
+                v0_3v=[
+                    0, 0,
+                    np.clip(np.random.normal(bunch.MU_VEL, bunch.SIG_VEL), 0, c)
+                ],
+                pos0_3v=[
+                    0, 0,
+                    np.random.normal(bunch.MU_POS, bunch.SIG_POS)
+                ],
+                mass_override=p_mass,
+                charge_override=p_charge
+            ))
+
+
 
     lab_particle_vel = np.array([p.get_3v() for p in parts])
     lab_particle_pos = np.array([p.get_3p()[0] for p in parts])
@@ -286,32 +338,51 @@ def routine(
     ###
     # STEP 4: Mesh
     ###
-    if bunch.LENGTH == 0:
-        bunch.LENGTH = max(lb_particle_pos[:, 2]) - min(lb_particle_pos[:, 2])
-    
 
-    tran_mesh, d_tran = np.linspace(
-        start=-bunch.RADIUS,
-        stop=bunch.RADIUS,
-        num=mesh.MESH_PTS,
-        retstep=True
+    # stupid hacky fix if we need to auto set bunch length
+    if bunch.LENGTH == -1:
+        bunch.LENGTH = max(lb_particle_pos[:,2]) - min(lb_particle_pos[:,2])
+
+    # the x mesh will always be this
+    x_mesh, dx = np.linspace(
+        start   = -bunch.RADIUS,
+        stop    = bunch.RADIUS,
+        num     = mesh.X_MESH_PTS,
+        retstep = True
     )
 
+    if mesh.Y_MESH_PTS == -1:
+        y_mesh = x_mesh
+        dy = dx
+    else:
+        y_mesh, dy = np.linspace(
+                start   = -bunch.RADIUS,
+                stop    = bunch.RADIUS,
+                num     = mesh.Y_MESH_PTS,
+                retstep = True
+        )
 
-    # mesh dimensions should be user input
-    # then add config to print the mesh plots from notebook
-    n_z = int(np.round(bunch.LENGTH / d_tran))
-    if n_z % 2 == 0:
-        n_z += 1
+    if mesh.Z_MESH_PTS == -1: # auto set length
+        mesh.Z_MESH_PTS = int(np.round(bunch.LENGTH / dx))  # total points (approx)
 
-    long_mesh = np.linspace(
-        start=-(n_z // 2) * d_tran,
-        stop=+(n_z // 2) * d_tran,
-        num=n_z
-    )
+        # i need odd numbers of mesh points to center at 0
+        if mesh.Z_MESH_PTS % 2 == 0:
+            mesh.Z_MESH_PTS += 1
 
-    x_mesh, y_mesh = tran_mesh, tran_mesh
-    z_mesh = long_mesh
+        z_mesh = np.linspace(
+            start = - (mesh.Z_MESH_PTS // 2) * dx,
+            stop  = + (mesh.Z_MESH_PTS // 2) * dx,
+            num   = mesh.Z_MESH_PTS
+        )
+        dz = dx
+    else:
+        z_mesh, dz = np.linspace(
+                start   = - bunch.LENGTH / 2,
+                stop    = + bunch.LENGTH / 2,
+                num     = mesh.Z_MESH_PTS,
+                retstep = True
+        )
+
 
     ###
     # STEP 5: Solve fields
@@ -372,14 +443,13 @@ def routine(
 
     lab_z_mesh = z_mesh / fv.gamma_3v(lab_ref_vel)
 
-    return final_E, final_B, x_mesh, lab_z_mesh
+    return final_E, final_B, x_mesh, y_mesh, lab_z_mesh
 
 if __name__ == "__main__":
 
     """This shows how to use the alternative way of calling spacecharger- good for
     real time stuffs when the bunch is changing and we have to change the mesh up a bit."""
     main_config = dict(
-        DEBUG = False,
         INTEGRATOR = "Trapezoidal", #Can be "Trapezoidal" or "Gaussian"
         SHOW_GAUSSIAN_FIT = False,
         SAVE_PLOTS = True,
@@ -389,20 +459,24 @@ if __name__ == "__main__":
 
     bunch_config = dict(
         NUM_PARTICLES = 10000,
-        SPECIES = "Electron",    # can be "Electron" or "Proton"
+        SPECIES = "Macro",    # can be "Electron" or "Proton" or "Macro"
         MU_VEL = 2.6E8, #m/s
         SIG_VEL = 5E6,  #m/s
         MU_POS = 0,     #meters
         SIG_POS = 1E-4, #meter
         DISTRIBUTION = "Mesa", # can be "Uniform", "Mesa", or "Gaussian"
         RADIUS = 1E-4,   # meters
-        LENGTH = 0 # if zero then just go from the distribution. this is recommended
+        LENGTH = -1,     # set to -1 to auto infer bunch length. recommended
+        CHARGE = -1     # Doesn't matter unless SPECIES is not Electron or Proton
     )
 
     #notes, 5 mesh points and 64 quad points seem to work decently well for
     # mu_v = 2.6E8, sig_v = 5E6, rad = 1E-4, integ = trap
     mesh_config = dict(
-        MESH_PTS = 9,
+        X_MESH_PTS = 5,
+        Y_MESH_PTS = 5,   # set to -1 to set dy = dx
+        Z_MESH_PTS = 15,  # set to -1 to set dz = dx
+        SHOW_MESH = True,
         QUAD_PTS = 64
     )
 
@@ -412,7 +486,7 @@ if __name__ == "__main__":
         WIDTH_GAUSSIANS = 0.00004
     )
 
-    E, B, x, z = routine(
+    E, B, x, y, z = routine(
         main_config=main_config,
         bunch_config=bunch_config,
         mesh_config=mesh_config,

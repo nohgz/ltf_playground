@@ -45,6 +45,7 @@ class BunchConfig:
     DISTRIBUTION: str
     RADIUS: float
     LENGTH: float
+    CHARGE: float
 
 @dataclass
 class MeshConfig:
@@ -77,6 +78,12 @@ class Reference(Enum):
     MASS   = 0        #kg
     CHARGE = 0        #C
 
+class Macroparticle(Enum):
+    """A mutable particle. Initialized to nothing, as that is up to user choice."""
+    NAME   = "MACROPARTICLE"
+    MASS   = 0  # kg
+    CHARGE = 0  # C
+
 class BunchParticle():
     def __init__(
             self,
@@ -85,7 +92,9 @@ class BunchParticle():
             pos0_4v = None,  # a four-position
             v0_3v  = None,   # a three-velocity
             v0_4v  = None,   # a four-velocity
-            frame  = "LAB"   # defaults to lab frame
+            frame  = "LAB",   # defaults to lab frame
+            mass_override = None, # stupid hack for macroparticles
+            charge_override = None # stupid hack for macroparticles
         ):
 
         ### HANDLE INITIAL VELOCITIES
@@ -111,8 +120,10 @@ class BunchParticle():
 
         # Get the parameters from the species of particle
         self.name = species.NAME.value
-        self.mass = species.MASS.value
-        self.charge = species.CHARGE.value
+
+        # override mass and charge if given
+        self.mass = mass_override if mass_override is not None else species.MASS.value
+        self.charge = charge_override if charge_override is not None else species.CHARGE.value
 
         self.vel_4v = v0_4v    # four velocity
         self.pos_4v = pos0_4v  # four position
@@ -265,17 +276,17 @@ def routine():
     config = parse_input_file(input_path)
 
     # Parse Inputs
-    main = MainConfig(**collected_data["Main"])
-    bunch = BunchConfig(**collected_data["Bunch"])
-    mesh = MeshConfig(**collected_data["Mesh"])
-    gauss = GaussFitsConfig(**collected_data["GaussFits"])
+    main_conf = MainConfig(**collected_data["Main"])
+    bunch_conf = BunchConfig(**collected_data["Bunch"])
+    mesh_conf = MeshConfig(**collected_data["Mesh"])
+    gauss_conf = GaussFitsConfig(**collected_data["GaussFits"])
 
     print_logo()
     print_inputs(config)
 
     # Prepare output directory
     timestamp = datetime.now().strftime('%m-%d-%Y_%H-%M-%S')
-    out_root = os.path.abspath(main.OUT_PATH)
+    out_root = os.path.abspath(main_conf.OUT_PATH)
     output_dir = os.path.join(out_root, f"output_{timestamp}")
 
     os.makedirs(output_dir, exist_ok=True)
@@ -294,7 +305,7 @@ def routine():
     log = logging.info
 
     # seed RNG if needed
-    if main.SEED_RNG:
+    if main_conf.SEED_RNG:
         np.random.seed(6969) # haha funny
 
     ###
@@ -303,15 +314,39 @@ def routine():
     # create an array of NUM_PARTICLES Particle Objects with random velocities
     parts = []
 
-    log("CREATE PARTICLE ARRAY...")
-    for i in range(bunch.NUM_PARTICLES):
-        # i'm just going to do a whole bunch just going in the z direction
-        # and give them a whole lot of positions
-        parts.append(BunchParticle(
-            Electron,
-            # generate a velocity that is clamped to c
-            v0_3v=[0, 0, np.clip(np.random.normal(bunch.MU_VEL, bunch.SIG_VEL),0,c)],
-            pos0_3v=[0 ,0, np.random.normal(bunch.MU_POS, bunch.SIG_POS)]
+    if bunch_conf.SPECIES[0].lower == "e":
+        log("USING ELECTRONS")
+        for i in range(bunch_conf.NUM_PARTICLES):
+            parts.append(BunchParticle(
+                Electron,
+                v0_3v=[0, 0, np.clip(np.random.normal(bunch_conf.MU_VEL, bunch_conf.SIG_VEL), 0, c)],
+                pos0_3v=[0, 0, np.random.normal(bunch_conf.MU_POS, bunch_conf.SIG_POS)]
+            ))
+    elif bunch_conf.SPECIES[0].lower == "p":
+        log("USING PROTONS")
+        for i in range(bunch_conf.NUM_PARTICLES):
+            parts.append(BunchParticle(
+                Proton,
+                v0_3v=[0, 0, np.clip(np.random.normal(bunch_conf.MU_VEL, bunch_conf.SIG_VEL), 0, c)],
+                pos0_3v=[0, 0, np.random.normal(bunch_conf.MU_POS, bunch_conf.SIG_POS)]
+            ))
+    else: #use macroparticle
+        p_charge = bunch_conf.CHARGE/bunch_conf.NUM_PARTICLES
+        p_mass = abs(p_charge/Electron.CHARGE.value)*Electron.MASS.value
+        log(f"USING MACROPARTICLES WITH q={p_charge} AND m={p_mass}")
+        for i in range(bunch_conf.NUM_PARTICLES):
+            parts.append(BunchParticle(
+                Macroparticle,
+                v0_3v=[
+                    0, 0,
+                    np.clip(np.random.normal(bunch_conf.MU_VEL, bunch_conf.SIG_VEL), 0, c)
+                ],
+                pos0_3v=[
+                    0, 0,
+                    np.random.normal(bunch_conf.MU_POS, bunch_conf.SIG_POS)
+                ],
+                mass_override=p_mass,
+                charge_override=p_charge
             ))
 
 
@@ -343,12 +378,12 @@ def routine():
 
     # get the velocities and positions of each particle
     log("GET BOOSTED VELOCITIES & POSITIONS...")
-    lb_particle_vel = np.array([particle.get_3v() for particle in parts])
-    lb_particle_pos = np.array([particle.get_3p()[0] for particle in parts])
+    com_particle_vel = np.array([particle.get_3v() for particle in parts])
+    com_particle_pos = np.array([particle.get_3p()[0] for particle in parts])
 
     # get the velocity and position of the reference particle
-    lb_ref_vel = np.mean(lb_particle_vel, axis=0)[0]
-    lb_ref_pos = np.mean(lb_particle_pos, axis=0)
+    com_ref_vel = np.mean(com_particle_vel, axis=0)[0]
+    com_ref_pos = np.mean(com_particle_pos, axis=0)
 
     ###
     # STEP 3: Bin the distribution of particles in the Lorentz-boosted frame
@@ -357,11 +392,11 @@ def routine():
     log("GET CHARGE DENSITY...")
 
     xGauss, ampGauss, sigGauss = mg.fit_gaussian_density(
-       lb_particle_pos[:,2],
-        nbins=gauss.NUM_BINS,
-        ngaussians=gauss.NUM_GAUSSIANS,
-        width=gauss.WIDTH_GAUSSIANS,
-        plot=main.SHOW_GAUSSIAN_FIT,
+        com_particle_pos[:,2],
+        nbins=gauss_conf.NUM_BINS,
+        ngaussians=gauss_conf.NUM_GAUSSIANS,
+        width=gauss_conf.WIDTH_GAUSSIANS,
+        plot=main_conf.SHOW_GAUSSIAN_FIT,
         scale=Electron.CHARGE.value)
 
     ###
@@ -372,75 +407,72 @@ def routine():
     #
     ###
 
-    log("CONSTRUCTING MESHES...")
+    log("CONSTRUCTING CO-MOVING MESHES...")
 
-    # stupid hacky fix if we need to manually set bunch length
-    if bunch.LENGTH == -1:
-        bunch.LENGTH = max(lb_particle_pos[:,2]) - min(lb_particle_pos[:,2])
-        log("AUTO SET BUNCH LEN...")
+    if bunch_conf.LENGTH == -1:
+        bunch_conf.LENGTH = max(com_particle_pos[:,2]) - min(com_particle_pos[:,2])
+        log(f"AUTO SET BUNCH LEN TO {bunch_conf.LENGTH}...")
 
     # the x mesh will always be this
-    x_mesh, dx = np.linspace(
-        start   = -bunch.RADIUS,
-        stop    = bunch.RADIUS,
-        num     = mesh.X_MESH_PTS,
+    com_x_mesh, dx = np.linspace(
+        start   = -bunch_conf.RADIUS,
+        stop    = bunch_conf.RADIUS,
+        num     = mesh_conf.X_MESH_PTS,
         retstep = True
     )
 
-    if mesh.Y_MESH_PTS == -1:
+    if mesh_conf.Y_MESH_PTS == -1:
         log("AUTO SET Y SPACING")
-        y_mesh = x_mesh
+        com_y_mesh = com_x_mesh
         dy = dx
     else:
-        y_mesh, dy = np.linspace(
-                start   = -bunch.RADIUS,
-                stop    = bunch.RADIUS,
-                num     = mesh.Y_MESH_PTS,
-                retstep = True
+        com_y_mesh, dy = np.linspace(
+            start   = -bunch_conf.RADIUS,
+            stop    = bunch_conf.RADIUS,
+            num     = mesh_conf.Y_MESH_PTS,
+            retstep = True
         )
 
-    if mesh.Z_MESH_PTS == -1: # auto set length
+    if mesh_conf.Z_MESH_PTS == -1:
         log("AUTO SET Z SPACING")
-        mesh.Z_MESH_PTS = int(np.round(bunch.LENGTH / dx))  # total points (approx)
+        mesh_conf.Z_MESH_PTS = int(np.round(bunch_conf.LENGTH / dx))
+        if mesh_conf.Z_MESH_PTS % 2 == 0:
+            mesh_conf.Z_MESH_PTS += 1
 
-        # i need odd numbers of mesh points to center at 0
-        if mesh.Z_MESH_PTS % 2 == 0:
-            mesh.Z_MESH_PTS += 1
-
-        z_mesh = np.linspace(
-            start = - (mesh.Z_MESH_PTS // 2) * dx,
-            stop  = + (mesh.Z_MESH_PTS // 2) * dx,
-            num   = mesh.Z_MESH_PTS
+        com_z_mesh = np.linspace(
+            start = -(mesh_conf.Z_MESH_PTS // 2) * dx,
+            stop  = +(mesh_conf.Z_MESH_PTS // 2) * dx,
+            num   = mesh_conf.Z_MESH_PTS
         )
         dz = dx
     else:
-        z_mesh, dz = np.linspace(
-                start   = - bunch.LENGTH / 2,
-                stop    = + bunch.LENGTH / 2,
-                num     = mesh.Z_MESH_PTS,
-                retstep = True
+        com_z_mesh, dz = np.linspace(
+            start   = -bunch_conf.LENGTH / 2,
+            stop    = +bunch_conf.LENGTH / 2,
+            num     = mesh_conf.Z_MESH_PTS,
+            retstep = True
         )
 
     log(f"MESH SPACING: dx: {dx}, dy: {dy}, dz: {dz}")
 
-    if mesh.SHOW_MESH:
+    if mesh_conf.SHOW_MESH:
         # plot the bunches
         import matplotlib.patches as patches
 
         # --- Compute Grids ---
-        X_xy, Y_xy = np.meshgrid(x_mesh, y_mesh, indexing='ij')
-        X_xz, Z_xz = np.meshgrid(x_mesh, z_mesh, indexing='ij')
+        X_xy, Y_xy = np.meshgrid(com_x_mesh, com_y_mesh, indexing='ij')
+        X_xz, Z_xz = np.meshgrid(com_x_mesh, com_z_mesh, indexing='ij')
 
         # Circle (bunch cross-section in xy-plane)
         theta = np.linspace(0, 2*np.pi, 200)
-        circle_x = bunch.RADIUS * np.cos(theta)
-        circle_y = bunch.RADIUS * np.sin(theta)
+        circle_x = bunch_conf.RADIUS * np.cos(theta)
+        circle_y = bunch_conf.RADIUS * np.sin(theta)
 
         # Rectangle (bunch cross-section in xz-plane)
-        z_min = -bunch.LENGTH / 2
-        z_max =  bunch.LENGTH / 2
-        x_min = -bunch.RADIUS
-        x_max =  bunch.RADIUS
+        z_min = -bunch_conf.LENGTH / 2
+        z_max =  bunch_conf.LENGTH / 2
+        x_min = -bunch_conf.RADIUS
+        x_max =  bunch_conf.RADIUS
 
         # --- Plotting ---
         fig, axs = plt.subplots(1, 2, figsize=(12, 5))
@@ -459,7 +491,7 @@ def routine():
         axs[1].grid(True)
         axs[1].scatter(Z_xz, X_xz, s=5, label='Mesh Points')
         rect = patches.Rectangle(
-            (z_min, x_min), bunch.LENGTH, 2*bunch.RADIUS,
+            (z_min, x_min), bunch_conf.LENGTH, 2 * bunch_conf.RADIUS,
             linewidth=1, edgecolor='r', facecolor='none', label='Bunch Region'
         )
         axs[1].add_patch(rect)
@@ -474,52 +506,50 @@ def routine():
 
 
     ### EVALUATE!!! ###
-    gauss_params = {
-        "xGauss": xGauss,
-        "ampGauss": ampGauss,
-        "sigGauss": sigGauss
-    }
-
-    lb_efld_cyl = ltsolvers.solve_SCFields(
-        bunch_rad=bunch.RADIUS,
-        bunch_len=bunch.LENGTH,
-        co_mesh=(x_mesh, y_mesh, z_mesh),
-        rho_type=bunch.DISTRIBUTION.lower(),
-        integrator=main.INTEGRATOR.lower(),
-        n=mesh.QUAD_PTS,
-        gauss_params=gauss_params
+    com_efld_cyl = ltsolvers.solve_SCFields(
+        bunch_rad=bunch_conf.RADIUS,
+        bunch_len=bunch_conf.LENGTH,
+        co_mesh=(com_x_mesh, com_y_mesh, com_z_mesh),
+        rho_type=bunch_conf.DISTRIBUTION.lower(),
+        integrator=main_conf.INTEGRATOR.lower(),
+        n=mesh_conf.QUAD_PTS,
+        gauss_params={
+            "xGauss": xGauss,
+            "ampGauss": ampGauss,
+            "sigGauss": sigGauss
+        }
     )
 
     # save the comoving eflds
-    if main.SAVE_PLOTS:
-        file_name = "co_eflds"
+    if main_conf.SAVE_PLOTS:
+        file_name = "com_eflds"
         file_path = os.path.join(output_dir, file_name + ".png")
         log(f"SAVING CO-MOVING E-FIELD PLOTS TO \"{file_path}\"...")
 
-        idx = closestVal(bunch.RADIUS, x_mesh)
-        idy = closestVal(0, y_mesh)
-        idz = closestVal(0, z_mesh)
+        idx = closestVal(bunch_conf.RADIUS, com_x_mesh)
+        idy = closestVal(0, com_y_mesh)
+        idz = closestVal(0, com_z_mesh)
 
         fig, axs = plt.subplots(1,2, figsize=(14, 5))
 
         # Radial Efld
         axs[0].grid()
-        axs[0].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
+        axs[0].axvline(x=com_ref_pos[0], label='Bunch Center', color='red')
         axs[0].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
-        axs[0].plot(z_mesh, lb_efld_cyl[idx, idy, :][:, 0], '.-', label="Radial Electric Field")
+        axs[0].plot(com_z_mesh, com_efld_cyl[idx, idy, :][:, 0], '.-', label="Radial Electric Field")
         axs[0].set_xlabel("Longitudinal Distance $z$ (m)")
         axs[0].set_ylabel("Electric Field Magnitude (V/m)")
-        axs[0].set_title(f"Radial Electric Field ($n$ = {mesh.QUAD_PTS}) (Co. Frame)")
+        axs[0].set_title(f"Radial Electric Field ($n$ = {mesh_conf.QUAD_PTS}) (Co. Frame)")
         axs[0].legend()
 
         # Longitudinal Efld
         axs[1].grid(True)
-        axs[1].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
-        axs[1].plot(z_mesh, lb_efld_cyl[idx, idy, :][:,2], '.-', label="Longitudinal Electric Field")
+        axs[1].axvline(x=com_ref_pos[0], label='Bunch Center', color='red')
+        axs[1].plot(com_z_mesh, com_efld_cyl[idx, idy, :][:,2], '.-', label="Longitudinal Electric Field")
         axs[1].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
         axs[1].set_xlabel("Longitudinal Distance $z$ (m)")
         axs[1].set_ylabel("Electric Field Magnitude (V/m)")
-        axs[1].set_title(f"Longitudinal Electric Field ($n$ = {mesh.QUAD_PTS}) (Co. Frame)")
+        axs[1].set_title(f"Longitudinal Electric Field ($n$ = {mesh_conf.QUAD_PTS}) (Co. Frame)")
         axs[1].legend()
 
         plt.tight_layout()
@@ -535,36 +565,30 @@ def routine():
     log("CONVERTING FIELDS TO CARTESIAN...")
 
     # Extract cylindrical field components
-    lb_ER = lb_efld_cyl[..., 0]
-    lb_EZ = lb_efld_cyl[..., 2]
+    com_ER = com_efld_cyl[..., 0]
+    com_EZ = com_efld_cyl[..., 2]
 
-    # Create meshgrids of x and y for phi calculation
-    X, Y = np.meshgrid(x_mesh, y_mesh, indexing='ij')
+    # Compute Ex and Ey in comoving frame
+    X, Y = np.meshgrid(com_x_mesh, com_y_mesh, indexing='ij')
     phi = np.arctan2(Y, X)
 
-    # Compute Ex and Ey
-    lb_Ex = lb_ER * np.cos(phi)[..., None]
-    lb_Ey = lb_ER * np.sin(phi)[..., None]
-    lb_Ez = lb_EZ
+    com_Ex = com_ER * np.cos(phi)[..., None]
+    com_Ey = com_ER * np.sin(phi)[..., None]
+    com_Ez = com_EZ
 
-    # Stack into final Cartesian E-field
-    lb_efld_cart = np.stack((lb_Ex, lb_Ey, lb_Ez), axis=-1)
+    com_efld_cart = np.stack((com_Ex, com_Ey, com_Ez), axis=-1)
 
     log("BOOSTING FIELDS BACK TO LAB FRAME...")
 
-    # Preallocate final E and B fields
-    shape = lb_efld_cart.shape[:3]
-    final_E = np.zeros_like(lb_efld_cart)
-    final_B = np.zeros_like(lb_efld_cart)
+    lab_E = np.zeros_like(com_efld_cart)
+    lab_B = np.zeros_like(com_efld_cart)
 
-    # Flatten spatial indices for efficiency
-    flat_E = lb_efld_cart.reshape(-1, 3)
+    flat_E = com_efld_cart.reshape(-1, 3)
     flat_E_boosted = []
     flat_B_boosted = []
 
     v_norm = norm(lab_ref_vel)
 
-    # Apply inverse field transform per point
     for E_vec in flat_E:
         E_tr, B_tr = fv.inverseFieldTransform(E_vec, np.zeros(3), v_norm)
         flat_E_boosted.append(E_tr)
@@ -576,43 +600,42 @@ def routine():
     flat_E_boosted[np.isnan(flat_E_boosted)] = 0.0
     flat_B_boosted[np.isnan(flat_B_boosted)] = 0.0
 
-    # Reshape boosted fields back
-    final_E = np.reshape(flat_E_boosted, lb_efld_cart.shape)
-    final_B = np.reshape(flat_B_boosted, lb_efld_cart.shape)
+    lab_E = np.reshape(flat_E_boosted, com_efld_cart.shape)
+    lab_B = np.reshape(flat_B_boosted, com_efld_cart.shape)
 
     # scale the lab frame mesh
-    lab_z_mesh = z_mesh / fv.gamma_3v(lab_ref_vel)
+    lab_z_mesh = com_z_mesh / fv.gamma_3v(lab_ref_vel)
 
     # save lab frame eflds
-    if main.SAVE_PLOTS:
+    if main_conf.SAVE_PLOTS:
         file_name = "lab_eflds"
         file_path = os.path.join(output_dir, file_name + ".png")
         log(f"SAVING LAB E-FIELD PLOTS TO \"{file_path}\"...")
 
-        idx = closestVal(bunch.RADIUS, x_mesh)
-        idy = closestVal(0, y_mesh)
-        idz = closestVal(0, z_mesh)
+        idx = closestVal(bunch_conf.RADIUS, com_x_mesh)
+        idy = closestVal(0, com_y_mesh)
+        idz = closestVal(0, com_z_mesh)
 
         fig, axs = plt.subplots(1,2, figsize=(14, 5))
 
         # Radial Efld
         axs[0].grid()
-        axs[0].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
+        axs[0].axvline(x=com_ref_pos[0], label='Bunch Center', color='red')
         axs[0].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
-        axs[0].plot(lab_z_mesh, final_E[idx, idy, :][:, 0], '.-', label="Radial Electric Field")
+        axs[0].plot(lab_z_mesh, lab_E[idx, idy, :][:, 0], '.-', label="Radial Electric Field")
         axs[0].set_xlabel("Longitudinal Distance $z$ (m)")
         axs[0].set_ylabel("Electric Field Magnitude (V/m)")
-        axs[0].set_title(f"Radial Electric Field ($n$ = {mesh.QUAD_PTS}) (Lab. Frame)")
+        axs[0].set_title(f"Radial Electric Field ($n$ = {mesh_conf.QUAD_PTS}) (Lab. Frame)")
         axs[0].legend()
 
         # Longitudinal Efld
         axs[1].grid(True)
-        axs[1].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
-        axs[1].plot(lab_z_mesh, final_E[idx, idy, :][:,2], '.-', label="Longitudinal Electric Field")
+        axs[1].axvline(x=com_ref_pos[0], label='Bunch Center', color='red')
+        axs[1].plot(lab_z_mesh, lab_E[idx, idy, :][:,2], '.-', label="Longitudinal Electric Field")
         axs[1].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
         axs[1].set_xlabel("Longitudinal Distance $z$ (m)")
         axs[1].set_ylabel("Electric Field Magnitude (V/m)")
-        axs[1].set_title(f"Longitudinal Electric Field ($n$ = {mesh.QUAD_PTS}) (Lab. Frame)")
+        axs[1].set_title(f"Longitudinal Electric Field ($n$ = {mesh_conf.QUAD_PTS}) (Lab. Frame)")
         axs[1].legend()
 
         plt.tight_layout()
@@ -620,35 +643,35 @@ def routine():
         plt.close()
 
     # save lab B-fields
-    if main.SAVE_PLOTS:
+    if main_conf.SAVE_PLOTS:
         file_name = "lab_bflds"
         file_path = os.path.join(output_dir, file_name + ".png")
         log(f"SAVING LAB B-FIELD PLOTS TO \"{file_path}\"...")
 
-        idx = closestVal(bunch.RADIUS, x_mesh)
-        idy = closestVal(0, y_mesh)
-        idz = closestVal(0, z_mesh)
+        idx = closestVal(bunch_conf.RADIUS, com_x_mesh)
+        idy = closestVal(0, com_y_mesh)
+        idz = closestVal(0, com_z_mesh)
 
         fig, axs = plt.subplots(1,2, figsize=(14, 5))
 
         # B_x
         axs[0].grid()
-        axs[0].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
-        axs[0].plot(lab_z_mesh, final_B[idx, idy, :][:, 0], '.-', label="Horizontal Magnetic Field")
+        axs[0].axvline(x=com_ref_pos[0], label='Bunch Center', color='red')
+        axs[0].plot(lab_z_mesh, lab_B[idx, idy, :][:, 0], '.-', label="Horizontal Magnetic Field")
         axs[0].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Bunch Length')
         axs[0].set_xlabel("Longitudinal Distance $z$ (m)")
         axs[0].set_ylabel("Magnetic Field Magnitude (T)")
-        axs[0].set_title(f"Horizontal Magnetic Field($n$ = {mesh.QUAD_PTS}) (Lab. Frame)")
+        axs[0].set_title(f"Horizontal Magnetic Field($n$ = {mesh_conf.QUAD_PTS}) (Lab. Frame)")
         axs[0].legend()
 
         # B_y
         axs[1].grid(True)
-        axs[1].axvline(x=lb_ref_pos[0], label='Bunch Center', color='red')
-        axs[1].plot(lab_z_mesh, final_B[idx, idy, :][:,1], '.-', label="Vertical Magnetic Field")
+        axs[1].axvline(x=com_ref_pos[0], label='Bunch Center', color='red')
+        axs[1].plot(lab_z_mesh, lab_B[idx, idy, :][:,1], '.-', label="Vertical Magnetic Field")
         axs[1].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Bunch Length')
         axs[1].set_xlabel("Longitudinal Distance $z$ (m)")
         axs[1].set_ylabel("Magnetic Field Magnitude (T)")
-        axs[1].set_title(f"Vertical Magnetic Field ($n$ = {mesh.QUAD_PTS}) (Lab. Frame)")
+        axs[1].set_title(f"Vertical Magnetic Field ($n$ = {mesh_conf.QUAD_PTS}) (Lab. Frame)")
         axs[1].legend()
 
         plt.tight_layout()
@@ -663,17 +686,17 @@ def routine():
     with open(fields_path, 'wb') as f:
         pickle.dump({
             "mesh_lab": lab_z_mesh,
-            "mesh_co": z_mesh,
-            "E_lab": final_E,
-            "B_lab": final_B,
-            "E_co": lb_efld_cart}, f)
+            "mesh_co": com_z_mesh,
+            "E_lab": lab_E,
+            "B_lab": lab_B,
+            "E_co": com_efld_cart}, f)
 
     print("[ DONE ]")
 
     # log some extra helpful information
     log(f"GAMMA: {fv.gamma_3v(lab_ref_vel)}")
     log(f"LAB BUNCH LEN: {lab_bunch_len}")
-    log(f"COMOVING BUNCH LEN: {bunch.LENGTH}")
+    log(f"COMOVING BUNCH LEN: {bunch_conf.LENGTH}")
 
 if __name__ == "__main__":
     # get system args, if any
