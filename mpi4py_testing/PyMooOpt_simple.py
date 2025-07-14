@@ -163,7 +163,6 @@ def evolve_distribution(gap,z,beam_charge,Nwake,Nimages,R,phi,energy,xGauss,AmpG
         wake = find_wake_def_shape(gap,z,Nimages,R,phi[i-1],energy,xGauss,AmpGauss,SigGauss)*beam_charge/1e6
         energies += 0.5*(wake[1:]+wake[:-1])*ds
 
-
     return energies
 
 class CSROptProblem(ElementwiseProblem):
@@ -205,11 +204,14 @@ class CSROptProblem(ElementwiseProblem):
 
         energies = evolve_distribution(gap,z,self.BeamCharge,self.Nwake,Nimages,self.R,self.Phi,self.energy,\
                                        self.xGauss,self.AmpGauss,self.SigGauss)
+        
+        # print(energies)
+        
         mean = np.sum(energies*0.5*(Lmd[1:]+Lmd[:-1])*(z[1]-z[0]))
         endtime = time.time()
 
 
-        print(f"evaluate: {endtime-starttime}")
+        # print(f"evaluate: {endtime-starttime}")
         out["F"] = np.sqrt(np.sum((energies - mean)**2*0.5*(Lmd[1:]+Lmd[:-1])*(z[1]-z[0])))
 
         #print(out["F"])
@@ -233,7 +235,7 @@ problem = CSROptProblem(beam_charge,sigma_z,energy,R,phi,shldmin,shldmax,NGauss,
 
 algorithm = ISRES(n_offsprings=50, rule=1.0 / 7.0, gamma=0.85, alpha=0.2)
 
-termination = get_termination("n_gen", 3) # could relax to 100
+termination = get_termination("n_gen", 8) # could relax to 100
 
 
 if __name__ == "__main__":

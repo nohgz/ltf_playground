@@ -56,10 +56,13 @@ workloads = [Nwake // mpi_size for i in range(mpi_size)]
 for i in range(Nwake % mpi_size):
     workloads[i] += 1
 
-mpi_wake_start = 0
-for i in range(mpi_rank):
-    mpi_wake_start += workloads[mpi_rank]
-mpi_wake_end = mpi_wake_start + workloads[mpi_rank]
+starts = [0]
+for w in workloads[:-1]:
+    starts.append(starts[-1]+w)
+ends = [s+w for s,w in zip(starts, workloads)]
+
+mpi_wake_start = starts[mpi_rank]
+mpi_wake_end = ends[mpi_rank]
 
 print(f"RANK: {mpi_rank} WAKE PART: {mpi_wake_start}-{mpi_wake_end}")
 # *** END MPI STUFF ***
@@ -103,7 +106,7 @@ def lmd(z,params,xGauss,AmpGauss,SigGauss,deriv=False):
     #return fac*np.exp(-z**2/(2*sigma**2))
     return fac*gauss_sum(z,NGauss,xGauss,AmpGauss,SigGauss) #*flat(z,sigma)
 
-# @njit()
+@njit()
 def find_wake_mayes_images(s,R,phi,energy,N,H,xGauss,AmpGauss,SigGauss):
     sL = R*phi**3/24.0
 
@@ -127,7 +130,7 @@ def find_wake_mayes_images(s,R,phi,energy,N,H,xGauss,AmpGauss,SigGauss):
 
     return Keps0*sum
 
-# @njit(fastmath=True)
+@njit(fastmath=True)
 def find_wake_mayes_ss(s,R,phi,energy,xGauss,AmpGauss,SigGauss):
 
     sL = R*phi**3/24.0
@@ -144,6 +147,7 @@ def find_wake_mayes_ss(s,R,phi,energy,xGauss,AmpGauss,SigGauss):
 
     ii = np.where(np.abs(alph) < 1e-3)
     jj = np.where(np.abs(alph) >= 1e-3)
+
 
     salph = 1/k*(k*s - alph + beta*ralph)
 
@@ -163,7 +167,7 @@ def find_wake_mayes_ss(s,R,phi,energy,xGauss,AmpGauss,SigGauss):
 
     return Keps0*sum
 
-# @njit(fastmath=True)
+@njit(fastmath=True)
 def find_wake_mayes(s,R,phi,energy,N,H,xGauss,AmpGauss,SigGauss):
     # Main CSR Wake
     eCSR = find_wake_mayes_ss(s,R,phi,energy,xGauss,AmpGauss,SigGauss)
@@ -171,11 +175,10 @@ def find_wake_mayes(s,R,phi,energy,N,H,xGauss,AmpGauss,SigGauss):
 
     return eCSR+eShld
 
-# @njit
+@njit
 def find_wake_def_shape_local(gap, z, Nimages, R, phi, energy, xGauss, AmpGauss, SigGauss):
     Wake_local = np.zeros(mpi_wake_end - mpi_wake_start)
     for local_i, global_i in enumerate(range(mpi_wake_start, mpi_wake_end)):
-
         Wake_local[local_i] = find_wake_mayes(
             z[global_i], R, phi, energy, Nimages, gap,
             xGauss, AmpGauss, SigGauss
@@ -183,16 +186,16 @@ def find_wake_def_shape_local(gap, z, Nimages, R, phi, energy, xGauss, AmpGauss,
     return Wake_local
 
 
-def evolve_distribution_mpi(
-    gap, z, beam_charge, Nwake, Nimages, R, phi_array, energy,
+def evolve_distribution(
+    gap, z, beam_charge, Nwake, Nimages, R, phi, energy,
     xGauss, AmpGauss, SigGauss):
-    
-    ds = R * (phi_array[1] - phi_array[0])
+    Ns = len(phi)
+    ds = R * (phi[1] - phi[0])
     energies = np.zeros(Nwake - 1)
 
-    for phi_i in phi_array:
+    for i in range(1, Ns):
         # Broadcast phi + profile to all ranks
-        mpi_comm.bcast((phi_i, AmpGauss, SigGauss), root=0)
+        mpi_comm.bcast((phi[i-1], AmpGauss, SigGauss), root=0)
 
         # Rank 0 computes its own chunk
         Wake_local = find_wake_def_shape_local(
@@ -200,7 +203,7 @@ def evolve_distribution_mpi(
             z=z,
             Nimages=Nimages,
             R=R,
-            phi=phi_i,
+            phi=phi[i-1],
             energy=energy,
             xGauss=xGauss,
             AmpGauss=AmpGauss,
@@ -221,8 +224,6 @@ def evolve_distribution_mpi(
 
     return energies
 
-
-
 def worker_loop(problem):
     z = np.linspace(-5 * problem.sigma, 5 * problem.sigma, problem.Nwake) #nwake might be a prob for memory and whatnot (maybe even worse)
     while True:
@@ -233,9 +234,9 @@ def worker_loop(problem):
         phi_i, AmpGauss, SigGauss = data
 
         Wake_local = find_wake_def_shape_local(
-            gap=1e-2,
+            gap=shldgap,
             z=z,
-            Nimages=0,
+            Nimages=Nimages,
             R=problem.R,
             phi=phi_i,
             energy=problem.energy,
@@ -278,21 +279,6 @@ class CSROptProblem(ElementwiseProblem):
             self.SigGauss = self.SigLim * np.ones(self.NGauss)
             z = np.linspace(-5*self.sigma, 5*self.sigma, self.Nwake)
 
-            energies = evolve_distribution_mpi(
-                gap=1e-2,
-                z=z,
-                beam_charge=self.BeamCharge,
-                Nwake=self.Nwake,
-                Nimages=0,
-                R=self.R,
-                phi_array=self.Phi,
-                energy=self.energy,
-                xGauss=self.xGauss,
-                AmpGauss=self.AmpGauss,
-                SigGauss=self.SigGauss
-            )
-
-            # Score the result
             Lmd = lmd(
                 z,
                 [self.sigma, 1.0, 1.0],
@@ -302,10 +288,24 @@ class CSROptProblem(ElementwiseProblem):
                 deriv=False
             )
 
+            energies = evolve_distribution(
+                gap=1e-2,
+                z=z,
+                beam_charge=self.BeamCharge,
+                Nwake=self.Nwake,
+                Nimages=0,
+                R=self.R,
+                phi=self.Phi,
+                energy=self.energy,
+                xGauss=self.xGauss,
+                AmpGauss=self.AmpGauss,
+                SigGauss=self.SigGauss
+            )
+
             mean = np.sum(energies * 0.5*(Lmd[1:] + Lmd[:-1]) * (z[1] - z[0]))
             out["F"] = np.sqrt(np.sum((energies - mean)**2 * 0.5*(Lmd[1:] + Lmd[:-1]) * (z[1] - z[0])))
 
-            print(f"Rank 0 evaluate time {time.time() - starttime:.2f} s")
+            # print(f"Rank 0 evaluate time {time.time() - starttime:.2f} s")
         else:
             # other ranks GO AWAY 0 is the only cool one
             pass
@@ -328,9 +328,7 @@ problem = CSROptProblem(beam_charge,sigma_z,energy,R,phi,shldmin,shldmax,NGauss,
 #
 
 algorithm = ISRES(n_offsprings=50, rule=1.0 / 7.0, gamma=0.85, alpha=0.2)
-
-termination = get_termination("n_gen", 3) # could relax to 100
-
+termination = get_termination("n_gen", 8) # could relax to 100
 
 #    -- old stuff --
 #    Ncores = 128
@@ -341,7 +339,6 @@ termination = get_termination("n_gen", 3) # could relax to 100
 #    runner = StarmapParallelization(pool.starmap)
 
 if __name__ == "__main__":
-
     if mpi_rank == 0:
 
         starttime = MPI.Wtime()
@@ -359,9 +356,10 @@ if __name__ == "__main__":
 
         print(f"TIME: {endtime-starttime}")
 
-        with open("opt_out.log", "wb") as f:
+        with open("opt_out.pkl", "wb") as f:
             pickle.dump(res, f)
 
     else:
         # Other ranks do
         worker_loop(problem)
+        pass
