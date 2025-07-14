@@ -9,6 +9,8 @@ from numpy.linalg import norm
 
 ### Define some helpful equations
 def gamma_3v(v):
+    print(v)
+    
     # ensure we're not going above c
     check_vel_3v(v)
 
@@ -56,6 +58,7 @@ def lorentz_matrix_z_4v(eta):
 def check_vel_3v(vel_3v):
     """Checks velocity to ensure that we're not going above c."""
     if norm(vel_3v) > 3E8:
+        print(vel_3v)
         raise ValueError("Velocity is above the speed of light (c)!")
 
 ### velocity stuff
@@ -64,8 +67,12 @@ def to_three_velocity(eta):
     return 3E8 * np.array([eta[1:]]) / eta[0]
 
 def to_four_velocity(v):
+    
+    four_v = np.zeros(4)
+    four_v[0] = 3E8
+    four_v[1:] = v
     """Returns a four velocity from a three velocity."""
-    return gamma_3v(v) * np.array([3E8, *v])
+    return four_v
 
 ### position stuff
 def to_three_position(a):

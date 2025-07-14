@@ -29,6 +29,7 @@ collected_data = {}
 class MainConfig:
     INTEGRATOR: str
     SHOW_GAUSSIAN_FIT: bool
+    SHOW_MESH: bool
     SAVE_PLOTS: bool
     OUT_PATH: str
     SEED_RNG: bool
@@ -39,8 +40,6 @@ class BunchConfig:
     SPECIES: str
     MU_VEL: float
     SIG_VEL: float
-    MU_POS: float
-    SIG_POS: float
     DISTRIBUTION: str
     RADIUS: float
     LENGTH: float
@@ -51,7 +50,6 @@ class MeshConfig:
     X_MESH_PTS: int
     Y_MESH_PTS: int
     Z_MESH_PTS: int
-    SHOW_MESH: bool
     QUAD_PTS: int
 
 @dataclass
@@ -66,7 +64,6 @@ class Proton(Enum):
     NAME   = "PROTON"
     MASS   = 1.672E-27 #kg
     CHARGE = 1.602E-19 #C
-
 class Electron(Enum):
     NAME   = "ELECTRON"
     MASS   = 9.109E-21 #kg
@@ -92,7 +89,7 @@ class BunchParticle():
             pos0_4v = None,  # a four-position
             v0_3v  = None,   # a three-velocity
             v0_4v  = None,   # a four-velocity
-            frame  = "LAB",  # defaults to lab frame
+            frame  = "LAB",   # defaults to lab frame
             mass_override = None, # stupid hack for macroparticles
             charge_override = None # stupid hack for macroparticles
         ):
@@ -176,54 +173,6 @@ class BunchParticle():
         return fv.to_three_position(self.pos_4v)
 # <<< PARTICLE CLASS <<<
 
-
-# >>> FILE PARSING >>>
-def get_input_filepath():
-    if len(sys.argv) < 2:
-        print("Usage: python spacecharger.py <input_file.py>")
-        sys.exit(1)
-
-    input_file = sys.argv[1]
-
-    if not os.path.isfile(input_file):
-        print(f"Error: File '{input_file}' not found.")
-        sys.exit(1)
-
-    return input_file
-
-def record_block(name):
-    def handler(**kwargs):
-        collected_data[name] = kwargs
-    return handler
-
-# Load the input file into this context
-def parse_input_file(filepath):
-    global_namespace = {
-        'Main': record_block("Main"),
-        'Bunch': record_block("Bunch"),
-        'Mesh': record_block("Mesh"),
-        'GaussFits': record_block("GaussFits")
-    }
-
-    with open(filepath, 'r') as f:
-        code = f.read()
-        exec(code, global_namespace)
-
-    return collected_data
-
-def open_lab_fields(filepath):
-    # Load the fields back from the pickle file
-    with open(filepath, 'rb') as f:
-        loaded_data = pickle.load(f)
-
-    # Retrieve the individual fields
-    E = loaded_data['E_lab']
-    B = loaded_data['B_lab']
-
-    return E, B
-
-#<<< FILE PARSING <<<
-
 # >>> HELPER FUNCTIONS >>>
 def closestVal(val, array, dx = None):
     if dx == None:
@@ -236,192 +185,213 @@ def closestVal(val, array, dx = None):
 # <<< HELPER FUNCTIONS <<<
 
 def routine(
-    input_file: str = None,
     main_config: dict = None,
     bunch_config: dict = None,
     mesh_config: dict = None,
     gaussfits_config: dict = None ):
     """
-    Run the routine either by providing an input file or by passing configs directly.
-    You must provide either `input_file` or all 4 configs.
+    Run the routine by passing configs directly.
     """
-    if input_file is not None:
-        # Load from input file
-        parse_input_file(input_file)
-        main = MainConfig(**collected_data["Main"])
-        bunch = BunchConfig(**collected_data["Bunch"])
-        mesh = MeshConfig(**collected_data["Mesh"])
-        gauss = GaussFitsConfig(**collected_data["GaussFits"])
-    else:
-        # Validate that all configs are given
-        if not all([main_config, bunch_config, mesh_config, gaussfits_config]):
-            raise ValueError("If input_file is not provided, you must provide all config dictionaries.")
-        main = MainConfig(**main_config)
-        bunch = BunchConfig(**bunch_config)
-        mesh = MeshConfig(**mesh_config)
-        gauss = GaussFitsConfig(**gaussfits_config)
+
+    # Validate that all configs are given
+    if not all([main_config, bunch_config, mesh_config, gaussfits_config]):
+        raise ValueError("If input_file is not provided, you must provide all config dictionaries.")
+
+    main_conf = MainConfig(**main_config)
+    bunch_conf = BunchConfig(**bunch_config)
+    mesh_conf = MeshConfig(**mesh_config)
+    gauss_conf = GaussFitsConfig(**gaussfits_config)
 
     # Seed RNG if needed
-    if main.SEED_RNG:
+    if main_conf.SEED_RNG:
         np.random.seed(6969)
+
+    print(f"NPARTS {bunch_conf.NUM_PARTICLES}")
 
     ###
     # STEP 1: Initialize the particle array
     ###
+    # create an array of NUM_PARTICLES Particle Objects with random velocities
     parts = []
 
-    if bunch.SPECIES[0].lower == "e":
-        for i in range(bunch.NUM_PARTICLES):
+    # i think this magic number works best for determining particle spread
+    # based only on a given bunch length for the lab
+    sig_pos = bunch_conf.LENGTH / 3
+
+    if bunch_conf.SPECIES[0].lower == "e":
+        for i in range(bunch_conf.NUM_PARTICLES):
             parts.append(BunchParticle(
                 Electron,
-                v0_3v=[0, 0, np.clip(np.random.normal(bunch.MU_VEL, bunch.SIG_VEL), 0, c)],
-                pos0_3v=[0, 0, np.random.normal(bunch.MU_POS, bunch.SIG_POS)]
+                v0_3v=[0, 0, np.clip(np.random.normal(bunch_conf.MU_VEL, bunch_conf.SIG_VEL), 0, c)],
+                pos0_3v=[0, 0, np.random.normal(0, sig_pos)]
             ))
-    elif bunch.SPECIES[0].lower == "p":
-        for i in range(bunch.NUM_PARTICLES):
+    elif bunch_conf.SPECIES[0].lower == "p":
+        for i in range(bunch_conf.NUM_PARTICLES):
             parts.append(BunchParticle(
                 Proton,
-                v0_3v=[0, 0, np.clip(np.random.normal(bunch.MU_VEL, bunch.SIG_VEL), 0, c)],
-                pos0_3v=[0, 0, np.random.normal(bunch.MU_POS, bunch.SIG_POS)]
+                v0_3v=[0, 0, np.clip(np.random.normal(bunch_conf.MU_VEL, bunch_conf.SIG_VEL), 0, c)],
+                pos0_3v=[0, 0, np.random.normal(0, sig_pos)]
             ))
     else: #use macroparticle
-        p_charge = bunch.CHARGE/bunch.NUM_PARTICLES
+        p_charge = bunch_conf.CHARGE/bunch_conf.NUM_PARTICLES
         p_mass = abs(p_charge/Electron.CHARGE.value)*Electron.MASS.value
-        print(f"num macros:{bunch.NUM_PARTICLES}, charge macros: {p_charge}")
-        for i in range(bunch.NUM_PARTICLES):
+        for i in range(bunch_conf.NUM_PARTICLES):
             parts.append(BunchParticle(
                 Macroparticle,
                 v0_3v=[
                     0, 0,
-                    np.clip(np.random.normal(bunch.MU_VEL, bunch.SIG_VEL), 0, c)
+                    np.clip(np.random.normal(bunch_conf.MU_VEL, bunch_conf.SIG_VEL), 0, c)
                 ],
                 pos0_3v=[
                     0, 0,
-                    np.random.normal(bunch.MU_POS, bunch.SIG_POS)
+                    np.random.normal(0, sig_pos)
                 ],
                 mass_override=p_mass,
                 charge_override=p_charge
             ))
 
+    # get the velocities and positions of each particle
+    lab_particle_vel = np.array([particle.get_3v() for particle in parts])
+    lab_particle_pos = np.array([particle.get_3p()[0] for particle in parts])
 
+    # get the velocity and position of the reference particle
+    # lab_ref_vel = np.mean(lab_particle_vel, axis=0)[0]
+    lab_ref_vel = parts[0].vel_4v[-1]
+    print(lab_ref_vel)
 
-    lab_particle_vel = np.array([p.get_3v() for p in parts])
-    lab_particle_pos = np.array([p.get_3p()[0] for p in parts])
-
-    lab_ref_vel = np.mean(lab_particle_vel, axis=0)[0]
     lab_ref_pos = np.mean(lab_particle_pos, axis=0)
 
-    reference = BunchParticle(Reference, v0_3v=lab_ref_vel, pos0_3v=lab_ref_pos)
+    # get the bunch length in the lab frame
+    lab_bunch_len = max(lab_particle_pos[:,2]) - min(lab_particle_pos[:,2])
+
+    # create reference particle
+    reference = BunchParticle(Reference, v0_3v = lab_ref_vel, pos0_3v = lab_ref_pos)
 
     ###
-    # STEP 2: Lorentz boost
+    # STEP 2: Lorentz boost to the reference particle's frame
     ###
-    for p in parts:
-        p.lorentz_boost_to(reference)
+
+    # Perform the lorentz boost for each particle
+    for particle in parts:
+        particle.lorentz_boost_to(reference)
 
     reference.boost_as_reference()
 
-    lb_particle_pos = np.array([p.get_3p()[0] for p in parts])
+    # get the velocities and positions of each particle
+    com_particle_vel = np.array([particle.get_3v() for particle in parts])
+    com_particle_pos = np.array([particle.get_3p()[0] for particle in parts])
+
+    # get the velocity and position of the reference particle
+    com_ref_vel = np.mean(com_particle_vel, axis=0)[0]
+    com_ref_pos = np.mean(com_particle_pos, axis=0)
 
     ###
-    # STEP 3: Gaussian binning
+    # STEP 3: Bin the distribution of particles in the Lorentz-boosted frame
     ###
+
+    # attempt to auto infer gaussian width based on bunch length
+    if gauss_conf.WIDTH_GAUSSIANS == -1:
+        gauss_conf.WIDTH_GAUSSIANS = 2 * lab_bunch_len / gauss_conf.NUM_BINS
+
+
+    print(f"FIT PARAMS \n BINS: {gauss_conf.NUM_BINS} \n NGAUS: {gauss_conf.NUM_GAUSSIANS} \n WIDTH: {gauss_conf.WIDTH_GAUSSIANS} \n SCALE: {bunch_conf.CHARGE}")
+
     xGauss, ampGauss, sigGauss = mg.fit_gaussian_density(
-        lb_particle_pos[:, 2],
-        nbins=gauss.NUM_BINS,
-        ngaussians=gauss.NUM_GAUSSIANS,
-        width=gauss.WIDTH_GAUSSIANS,
-        plot=main.SHOW_GAUSSIAN_FIT,
-        scale=Electron.CHARGE.value
-    )
+        com_particle_pos[:,2],
+        nbins=gauss_conf.NUM_BINS,
+        ngaussians=gauss_conf.NUM_GAUSSIANS,
+        width=gauss_conf.WIDTH_GAUSSIANS,
+        plot=main_conf.SHOW_GAUSSIAN_FIT,
+        scale=bunch_conf.CHARGE)
 
     ###
-    # STEP 4: Mesh
+    # STEP 4: Obtain the Longitudinal & Transverse Electric fields
+    #
+    # Take the bunch of particles to be a cylinder, and slice it up. Each slice
+    # will have a charge density determined by the bunched up particles.
+    #
     ###
 
-    # stupid hacky fix if we need to auto set bunch length
-    if bunch.LENGTH == -1:
-        bunch.LENGTH = max(lb_particle_pos[:,2]) - min(lb_particle_pos[:,2])
+    com_bunch_len = max(com_particle_pos[:,2]) - min(com_particle_pos[:,2])
 
     # the x mesh will always be this
-    x_mesh, dx = np.linspace(
-        start   = -bunch.RADIUS,
-        stop    = bunch.RADIUS,
-        num     = mesh.X_MESH_PTS,
+    com_x_mesh, dx = np.linspace(
+        start   = -bunch_conf.RADIUS,
+        stop    = bunch_conf.RADIUS,
+        num     = mesh_conf.X_MESH_PTS,
         retstep = True
     )
 
-    if mesh.Y_MESH_PTS == -1:
-        y_mesh = x_mesh
+    if mesh_conf.Y_MESH_PTS == -1:
+        com_y_mesh = com_x_mesh
         dy = dx
     else:
-        y_mesh, dy = np.linspace(
-                start   = -bunch.RADIUS,
-                stop    = bunch.RADIUS,
-                num     = mesh.Y_MESH_PTS,
-                retstep = True
+        com_y_mesh, dy = np.linspace(
+            start   = -bunch_conf.RADIUS,
+            stop    = bunch_conf.RADIUS,
+            num     = mesh_conf.Y_MESH_PTS,
+            retstep = True
         )
 
-    if mesh.Z_MESH_PTS == -1: # auto set length
-        mesh.Z_MESH_PTS = int(np.round(bunch.LENGTH / dx))  # total points (approx)
+    if mesh_conf.Z_MESH_PTS == -1:
+        mesh_conf.Z_MESH_PTS = int(np.round(com_bunch_len / dx))
+        if mesh_conf.Z_MESH_PTS % 2 == 0:
+            mesh_conf.Z_MESH_PTS += 1
 
-        # i need odd numbers of mesh points to center at 0
-        if mesh.Z_MESH_PTS % 2 == 0:
-            mesh.Z_MESH_PTS += 1
-
-        z_mesh = np.linspace(
-            start = - (mesh.Z_MESH_PTS // 2) * dx,
-            stop  = + (mesh.Z_MESH_PTS // 2) * dx,
-            num   = mesh.Z_MESH_PTS
+        com_z_mesh = np.linspace(
+            start = -(mesh_conf.Z_MESH_PTS // 2) * dx,
+            stop  = +(mesh_conf.Z_MESH_PTS // 2) * dx,
+            num   = mesh_conf.Z_MESH_PTS
         )
         dz = dx
     else:
-        z_mesh, dz = np.linspace(
-                start   = - bunch.LENGTH / 2,
-                stop    = + bunch.LENGTH / 2,
-                num     = mesh.Z_MESH_PTS,
-                retstep = True
+        com_z_mesh, dz = np.linspace(
+            start   = -com_bunch_len / 2,
+            stop    = +com_bunch_len / 2,
+            num     = mesh_conf.Z_MESH_PTS,
+            retstep = True
         )
 
-
-    ###
-    # STEP 5: Solve fields
-    ###
-    gauss_params = {
-        "xGauss": xGauss,
-        "ampGauss": ampGauss,
-        "sigGauss": sigGauss
-    }
-
-    lb_efld_cyl = ltsolvers.solve_SCFields(
-        bunch_rad=bunch.RADIUS,
-        bunch_len=bunch.LENGTH,
-        co_mesh=(x_mesh, y_mesh, z_mesh),
-        rho_type=bunch.DISTRIBUTION.lower(),
-        integrator=main.INTEGRATOR.lower(),
-        n=mesh.QUAD_PTS,
-        gauss_params=gauss_params
+    ### EVALUATE!!! ###
+    com_efld_cyl = ltsolvers.solve_SCFields(
+        bunch_rad=bunch_conf.RADIUS,
+        bunch_len=com_bunch_len,
+        co_mesh=(com_x_mesh, com_y_mesh, com_z_mesh),
+        rho_type=bunch_conf.DISTRIBUTION.lower(),
+        integrator=main_conf.INTEGRATOR.lower(),
+        n=mesh_conf.QUAD_PTS,
+        gauss_params={
+            "xGauss": xGauss,
+            "ampGauss": ampGauss,
+            "sigGauss": sigGauss
+        }
     )
 
-    ###
-    # STEP 6: Convert cylindrical to Cartesian
-    ###
-    lb_ER = lb_efld_cyl[..., 0]
-    lb_EZ = lb_efld_cyl[..., 2]
 
-    X, Y = np.meshgrid(x_mesh, y_mesh, indexing='ij')
+    ###
+    # Step 6: Convert the fields in the reference particle frame to cartesian,
+    #         then convert that into the lab frame using the functions that I defined.
+    ###
+
+    # Extract cylindrical field components
+    com_ER = com_efld_cyl[..., 0]
+    com_EZ = com_efld_cyl[..., 2]
+
+    # Compute Ex and Ey in comoving frame
+    X, Y = np.meshgrid(com_x_mesh, com_y_mesh, indexing='ij')
     phi = np.arctan2(Y, X)
 
-    lb_Ex = lb_ER * np.cos(phi)[..., None]
-    lb_Ey = lb_ER * np.sin(phi)[..., None]
-    lb_Ez = lb_EZ
+    com_Ex = com_ER * np.cos(phi)[..., None]
+    com_Ey = com_ER * np.sin(phi)[..., None]
+    com_Ez = com_EZ
 
-    lb_efld_cart = np.stack((lb_Ex, lb_Ey, lb_Ez), axis=-1)
+    com_efld_cart = np.stack((com_Ex, com_Ey, com_Ez), axis=-1)
 
-    ###
-    # STEP 7: Transform to lab frame
-    ###
-    flat_E = lb_efld_cart.reshape(-1, 3)
+
+    lab_E = np.zeros_like(com_efld_cart)
+    lab_B = np.zeros_like(com_efld_cart)
+
+    flat_E = com_efld_cart.reshape(-1, 3)
     flat_E_boosted = []
     flat_B_boosted = []
 
@@ -438,57 +408,14 @@ def routine(
     flat_E_boosted[np.isnan(flat_E_boosted)] = 0.0
     flat_B_boosted[np.isnan(flat_B_boosted)] = 0.0
 
-    final_E = np.reshape(flat_E_boosted, lb_efld_cart.shape)
-    final_B = np.reshape(flat_B_boosted, lb_efld_cart.shape)
+    lab_E = np.reshape(flat_E_boosted, com_efld_cart.shape)
+    lab_B = np.reshape(flat_B_boosted, com_efld_cart.shape)
 
-    lab_z_mesh = z_mesh / fv.gamma_3v(lab_ref_vel)
+    # scale the lab frame mesh
+    lab_z_mesh = com_z_mesh / fv.gamma_3v(lab_ref_vel)
 
-    return final_E, final_B, x_mesh, y_mesh, lab_z_mesh
 
-if __name__ == "__main__":
+    print(f"lab_zmeshran -> {lab_z_mesh[0]} TO {lab_z_mesh[-1]}")
+    print(f"com_blen -> {com_bunch_len}")
 
-    """This shows how to use the alternative way of calling spacecharger- good for
-    real time stuffs when the bunch is changing and we have to change the mesh up a bit."""
-    main_config = dict(
-        INTEGRATOR = "Trapezoidal", #Can be "Trapezoidal" or "Gaussian"
-        SHOW_GAUSSIAN_FIT = False,
-        SAVE_PLOTS = True,
-        OUT_PATH = ".",
-        SEED_RNG = True
-    )
-
-    bunch_config = dict(
-        NUM_PARTICLES = 10000,
-        SPECIES = "Macro",    # can be "Electron" or "Proton" or "Macro"
-        MU_VEL = 2.6E8, #m/s
-        SIG_VEL = 5E6,  #m/s
-        MU_POS = 0,     #meters
-        SIG_POS = 1E-4, #meter
-        DISTRIBUTION = "Mesa", # can be "Uniform", "Mesa", or "Gaussian"
-        RADIUS = 1E-4,   # meters
-        LENGTH = -1,     # set to -1 to auto infer bunch length. recommended
-        CHARGE = -1     # Doesn't matter unless SPECIES is not Electron or Proton
-    )
-
-    #notes, 5 mesh points and 64 quad points seem to work decently well for
-    # mu_v = 2.6E8, sig_v = 5E6, rad = 1E-4, integ = trap
-    mesh_config = dict(
-        X_MESH_PTS = 5,
-        Y_MESH_PTS = 5,   # set to -1 to set dy = dx
-        Z_MESH_PTS = 15,  # set to -1 to set dz = dx
-        SHOW_MESH = True,
-        QUAD_PTS = 64
-    )
-
-    gaussfits_config = dict(
-        NUM_BINS = 50,
-        NUM_GAUSSIANS = 50,
-        WIDTH_GAUSSIANS = 0.00004
-    )
-
-    E, B, x, y, z = routine(
-        main_config=main_config,
-        bunch_config=bunch_config,
-        mesh_config=mesh_config,
-        gaussfits_config=gaussfits_config
-    )
+    return lab_E, lab_B, com_x_mesh, com_y_mesh, lab_z_mesh

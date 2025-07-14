@@ -1,0 +1,3 @@
+PROFILING
+
+python -m cProfile -o pmo.prof PyMooOpt_simple.py

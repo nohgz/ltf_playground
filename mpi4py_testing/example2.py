@@ -26,7 +26,7 @@ def main():
     if my_rank == 0:
         print(f"Initialize a time: {end_time - start_time}")
 
-    # init b 
+    # init b
     start_time = MPI.Wtime()
     b = np.zeros(N)
     for i in range(my_start, my_end):
@@ -49,16 +49,16 @@ def main():
     for i in range(my_start, my_end):
         sum += a[i]
 
-    if my_rank ==0:
+    if my_rank == 0:
         world_sum = sum
-        for i in range(1 , world_size):
-            sum_np = np.empty(1)
-            world_comm.Recv( [sum_np, MPI.DOUBLE], source = i, tag=77 )
+        for i in range( 1, world_size ):
+            sum_np = np.empty( 1 )
+            world_comm.Recv( [sum_np, MPI.DOUBLE], source=i, tag=77 )
             world_sum += sum_np[0]
         average = world_sum / N
     else:
-        sum_np = np.array([sum])
-        world_comm.Send( [sum_np, MPI.DOUBLE], dest=0, tag=77)
+        sum_np = np.array( [sum] )
+        world_comm.Send( [sum_np, MPI.DOUBLE], dest=0, tag=77 )
     
     end_time = MPI.Wtime()
     if my_rank == 0:

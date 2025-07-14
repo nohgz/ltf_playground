@@ -30,6 +30,7 @@ collected_data = {}
 class MainConfig:
     INTEGRATOR: str
     SHOW_GAUSSIAN_FIT: bool
+    SHOW_MESH: bool
     SAVE_PLOTS: bool
     OUT_PATH: str
     SEED_RNG: bool
@@ -40,8 +41,6 @@ class BunchConfig:
     SPECIES: str
     MU_VEL: float
     SIG_VEL: float
-    MU_POS: float
-    SIG_POS: float
     DISTRIBUTION: str
     RADIUS: float
     LENGTH: float
@@ -52,7 +51,6 @@ class MeshConfig:
     X_MESH_PTS: int
     Y_MESH_PTS: int
     Z_MESH_PTS: int
-    SHOW_MESH: bool
     QUAD_PTS: int
 
 @dataclass
@@ -271,18 +269,37 @@ def closestVal(val, array, dx = None):
     return int((val - array[0])/dx)
 # <<< HELPER FUNCTIONS <<<
 
-def routine():
-    input_path = get_input_filepath()
-    config = parse_input_file(input_path)
+def routine(
+    input_file: str = None,
+    main_config: dict = None,
+    bunch_config: dict = None,
+    mesh_config: dict = None,
+    gaussfits_config: dict = None ):
+    """
+    Run the routine either by providing an input file or by passing configs directly.
+    You must provide either `input_file` or all 4 configs.
+    """
+    if input_file is not None:
+        # Load from input file
+        parse_input_file(input_file)
+        main_conf = MainConfig(**collected_data["Main"])
+        bunch_conf = BunchConfig(**collected_data["Bunch"])
+        mesh_conf = MeshConfig(**collected_data["Mesh"])
+        gauss_conf = GaussFitsConfig(**collected_data["GaussFits"])
+    else:
+        # Validate that all configs are given
+        if not all([main_config, bunch_config, mesh_config, gaussfits_config]):
+            raise ValueError("If input_file is not provided, you must provide all config dictionaries.")
+        main_conf = MainConfig(**main_config)
+        bunch_conf = BunchConfig(**bunch_config)
+        mesh_conf = MeshConfig(**mesh_config)
+        gauss_conf = GaussFitsConfig(**gaussfits_config)
 
-    # Parse Inputs
-    main_conf = MainConfig(**collected_data["Main"])
-    bunch_conf = BunchConfig(**collected_data["Bunch"])
-    mesh_conf = MeshConfig(**collected_data["Mesh"])
-    gauss_conf = GaussFitsConfig(**collected_data["GaussFits"])
+    # Seed RNG if needed
+    if main_conf.SEED_RNG:
+        np.random.seed(6969)
 
     print_logo()
-    print_inputs(config)
 
     # Prepare output directory
     timestamp = datetime.now().strftime('%m-%d-%Y_%H-%M-%S')
@@ -314,13 +331,17 @@ def routine():
     # create an array of NUM_PARTICLES Particle Objects with random velocities
     parts = []
 
+    # i think this magic number works best for determining particle spread
+    # based only on a given bunch length for the lab
+    sig_pos = bunch_conf.LENGTH / 14
+
     if bunch_conf.SPECIES[0].lower == "e":
         log("USING ELECTRONS")
         for i in range(bunch_conf.NUM_PARTICLES):
             parts.append(BunchParticle(
                 Electron,
                 v0_3v=[0, 0, np.clip(np.random.normal(bunch_conf.MU_VEL, bunch_conf.SIG_VEL), 0, c)],
-                pos0_3v=[0, 0, np.random.normal(bunch_conf.MU_POS, bunch_conf.SIG_POS)]
+                pos0_3v=[0, 0, np.random.normal(0, sig_pos)]
             ))
     elif bunch_conf.SPECIES[0].lower == "p":
         log("USING PROTONS")
@@ -328,7 +349,7 @@ def routine():
             parts.append(BunchParticle(
                 Proton,
                 v0_3v=[0, 0, np.clip(np.random.normal(bunch_conf.MU_VEL, bunch_conf.SIG_VEL), 0, c)],
-                pos0_3v=[0, 0, np.random.normal(bunch_conf.MU_POS, bunch_conf.SIG_POS)]
+                pos0_3v=[0, 0, np.random.normal(0, sig_pos)]
             ))
     else: #use macroparticle
         p_charge = bunch_conf.CHARGE/bunch_conf.NUM_PARTICLES
@@ -343,7 +364,7 @@ def routine():
                 ],
                 pos0_3v=[
                     0, 0,
-                    np.random.normal(bunch_conf.MU_POS, bunch_conf.SIG_POS)
+                    np.random.normal(0, sig_pos)
                 ],
                 mass_override=p_mass,
                 charge_override=p_charge
@@ -391,13 +412,17 @@ def routine():
 
     log("GET CHARGE DENSITY...")
 
+    # attempt to auto infer gaussian width based on bunch length
+    if gauss_conf.WIDTH_GAUSSIANS == -1:
+        gauss_conf.WIDTH_GAUSSIANS = 2 * lab_bunch_len / gauss_conf.NUM_BINS
+
     xGauss, ampGauss, sigGauss = mg.fit_gaussian_density(
         com_particle_pos[:,2],
         nbins=gauss_conf.NUM_BINS,
         ngaussians=gauss_conf.NUM_GAUSSIANS,
         width=gauss_conf.WIDTH_GAUSSIANS,
         plot=main_conf.SHOW_GAUSSIAN_FIT,
-        scale=Electron.CHARGE.value)
+        scale=bunch_conf.CHARGE)
 
     ###
     # STEP 4: Obtain the Longitudinal & Transverse Electric fields
@@ -409,9 +434,7 @@ def routine():
 
     log("CONSTRUCTING CO-MOVING MESHES...")
 
-    if bunch_conf.LENGTH == -1:
-        bunch_conf.LENGTH = max(com_particle_pos[:,2]) - min(com_particle_pos[:,2])
-        log(f"AUTO SET BUNCH LEN TO {bunch_conf.LENGTH}...")
+    com_bunch_len = max(com_particle_pos[:,2]) - min(com_particle_pos[:,2])
 
     # the x mesh will always be this
     com_x_mesh, dx = np.linspace(
@@ -435,7 +458,7 @@ def routine():
 
     if mesh_conf.Z_MESH_PTS == -1:
         log("AUTO SET Z SPACING")
-        mesh_conf.Z_MESH_PTS = int(np.round(bunch_conf.LENGTH / dx))
+        mesh_conf.Z_MESH_PTS = int(np.round(com_bunch_len / dx))
         if mesh_conf.Z_MESH_PTS % 2 == 0:
             mesh_conf.Z_MESH_PTS += 1
 
@@ -447,15 +470,18 @@ def routine():
         dz = dx
     else:
         com_z_mesh, dz = np.linspace(
-            start   = -bunch_conf.LENGTH / 2,
-            stop    = +bunch_conf.LENGTH / 2,
+            start   = -com_bunch_len / 2,
+            stop    = +com_bunch_len / 2,
             num     = mesh_conf.Z_MESH_PTS,
             retstep = True
         )
 
     log(f"MESH SPACING: dx: {dx}, dy: {dy}, dz: {dz}")
 
-    if mesh_conf.SHOW_MESH:
+
+
+
+    if main_conf.SHOW_MESH:
         # plot the bunches
         import matplotlib.patches as patches
 
@@ -469,8 +495,8 @@ def routine():
         circle_y = bunch_conf.RADIUS * np.sin(theta)
 
         # Rectangle (bunch cross-section in xz-plane)
-        z_min = -bunch_conf.LENGTH / 2
-        z_max =  bunch_conf.LENGTH / 2
+        z_min = -com_bunch_len / 2
+        z_max =  com_bunch_len / 2
         x_min = -bunch_conf.RADIUS
         x_max =  bunch_conf.RADIUS
 
@@ -491,7 +517,7 @@ def routine():
         axs[1].grid(True)
         axs[1].scatter(Z_xz, X_xz, s=5, label='Mesh Points')
         rect = patches.Rectangle(
-            (z_min, x_min), bunch_conf.LENGTH, 2 * bunch_conf.RADIUS,
+            (z_min, x_min), com_bunch_len, 2 * bunch_conf.RADIUS,
             linewidth=1, edgecolor='r', facecolor='none', label='Bunch Region'
         )
         axs[1].add_patch(rect)
@@ -502,13 +528,22 @@ def routine():
         axs[1].legend()
 
         plt.tight_layout()
+
+        if main_conf.SAVE_PLOTS:
+            file_name = "com_meshes"
+            file_path = os.path.join(output_dir, file_name + ".png")
+            log(f"SAVING CO-MOVING MESH DIAGRAMS TO \"{file_path}\"...")
+
+            plt.savefig(file_path)
+
         plt.show()
+        plt.close()
 
 
     ### EVALUATE!!! ###
     com_efld_cyl = ltsolvers.solve_SCFields(
         bunch_rad=bunch_conf.RADIUS,
-        bunch_len=bunch_conf.LENGTH,
+        bunch_len=com_bunch_len,
         co_mesh=(com_x_mesh, com_y_mesh, com_z_mesh),
         rho_type=bunch_conf.DISTRIBUTION.lower(),
         integrator=main_conf.INTEGRATOR.lower(),
@@ -555,7 +590,6 @@ def routine():
         plt.tight_layout()
         plt.savefig(file_path)
         plt.close()
-
 
     ###
     # Step 6: Convert the fields in the reference particle frame to cartesian,
@@ -696,8 +730,54 @@ def routine():
     # log some extra helpful information
     log(f"GAMMA: {fv.gamma_3v(lab_ref_vel)}")
     log(f"LAB BUNCH LEN: {lab_bunch_len}")
-    log(f"COMOVING BUNCH LEN: {bunch_conf.LENGTH}")
+    log(f"COMOVING BUNCH LEN: {com_bunch_len}")
 
 if __name__ == "__main__":
     # get system args, if any
-    routine()
+    main_config = dict(
+        INTEGRATOR = "Trapezoidal", #Can be "Trapezoidal" or "Gaussian"
+        SHOW_GAUSSIAN_FIT = True,
+        SHOW_MESH = True,
+        SAVE_PLOTS = True,
+        OUT_PATH = ".",
+        SEED_RNG = True
+    )
+
+    bunch_config = dict(
+        # change the particles to be macroparticles. i.e. define bunch charge and then
+        # scale it according to num particles (q = bunchCharge/N)
+        NUM_PARTICLES = 5,
+        SPECIES = "Electron",    # can be "Electron" or "Proton"
+        MU_VEL = 2.6E8, #m/s
+        SIG_VEL = 5E6,  #m/s
+        DISTRIBUTION = "Gaussian", # can be "Uniform", "Mesa", or "Gaussian"
+        RADIUS = 0.02097928077291609, # meters
+        LENGTH = 0.003631584759359322,
+        CHARGE = -1e-08
+    )
+
+
+    #notes, 7 mesh points and 64 quad points seem to work decently well for
+    # mu_v = 2.6E8, sig_v = 5E6, rad = 1E-4, integ = trap
+    mesh_config = dict(
+        X_MESH_PTS = 5,
+        Y_MESH_PTS = 5,   # set to -1 to set dy = dx
+        Z_MESH_PTS = 49,  # set to -1 to set dz = dx
+        QUAD_PTS = 48
+    )
+
+    gaussfits_config = dict(
+        NUM_BINS = 50,
+        NUM_GAUSSIANS = 50,
+        WIDTH_GAUSSIANS = -1 # set to -1 to auto infer based on bunch length (works p well)
+    )
+
+    routine(
+        main_config=main_config,
+        bunch_config=bunch_config,
+        mesh_config=mesh_config,
+        gaussfits_config=gaussfits_config
+    )
+
+    # alternatively, we can pass in an input file like so
+    # routine(sys.argv[1])

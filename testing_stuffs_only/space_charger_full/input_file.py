@@ -1,6 +1,7 @@
 Main(
     INTEGRATOR = "Trapezoidal", #Can be "Trapezoidal" or "Gaussian"
-    SHOW_GAUSSIAN_FIT = False,
+    SHOW_GAUSSIAN_FIT = True,
+    SHOW_MESH = True,
     SAVE_PLOTS = True,
     OUT_PATH = ".",
     SEED_RNG = True
@@ -9,32 +10,29 @@ Main(
 Bunch(
     # change the particles to be macroparticles. i.e. define bunch charge and then
     # scale it according to num particles (q = bunchCharge/N)
-    NUM_PARTICLES = 10000,
+    NUM_PARTICLES = 5,
     SPECIES = "Electron",    # can be "Electron" or "Proton"
     MU_VEL = 2.6E8, #m/s
     SIG_VEL = 5E6,  #m/s
-    MU_POS = 0,     #meters
-    SIG_POS = 1E-4, #meter
     DISTRIBUTION = "Gaussian", # can be "Uniform", "Mesa", or "Gaussian"
     RADIUS = 2.5e-6,   # meters
-    LENGTH = 5.2e-5,     # set to -1 to auto infer bunch length. recommended
+    LENGTH = 1.2e-2,
     CHARGE = -1e-08
 )
 
-#notes, 5 mesh points and 64 quad points seem to work decently well for
+#notes, 7 mesh points and 64 quad points seem to work decently well for
 # mu_v = 2.6E8, sig_v = 5E6, rad = 1E-4, integ = trap
 Mesh(
-    X_MESH_PTS = 5,
-    Y_MESH_PTS = 5,   # set to -1 to set dy = dx
-    Z_MESH_PTS = 15,  # set to -1 to set dz = dx
-    SHOW_MESH = True,
-    QUAD_PTS = 64
+    X_MESH_PTS = 7,
+    Y_MESH_PTS = 7,   # set to -1 to set dy = dx
+    Z_MESH_PTS = 49,  # set to -1 to set dz = dx
+    QUAD_PTS = 48
 )
 
 GaussFits(
     NUM_BINS = 50,
     NUM_GAUSSIANS = 50,
-    WIDTH_GAUSSIANS = 0.00004
+    WIDTH_GAUSSIANS = -1 # set to -1 to auto infer based on bunch length (works p well)
 )
 
 #notes, 9 mesh points and 64 quad points seem to work decently well (exec time = )
