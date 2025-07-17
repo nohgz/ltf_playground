@@ -381,7 +381,7 @@ def routine(
         (com_x_mesh, com_y_mesh, com_z_mesh),
         com_efld_cart[...,1]
     )
-    
+
     Ez_interp = RegularGridInterpolator(
         (com_x_mesh, com_y_mesh, com_z_mesh),
         com_efld_cart[...,2]\
@@ -396,7 +396,7 @@ def routine(
         Ey_interp(com_particle_pos),
         Ez_interp(com_particle_pos)
     ], axis=1)
-    
+
     # print("PB.shape", E_com_at_particles.shape)
 
     # Lorentz transform each field vector to lab frame
@@ -413,7 +413,7 @@ def routine(
 
     # print(lab_E_at_particles)
     # print(lab_B_at_particles)
-    
+
     print("[ CYCLE DONE ] \n \n")
 
     return lab_E_at_particles, lab_B_at_particles

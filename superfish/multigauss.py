@@ -24,6 +24,10 @@ def fit_gaussian_density(
     # Histogram particle positions
     histo, bins = np.histogram(z_array, bins=nbins, density=True)
 
+    print("HISTO & BINS", histo, bins)
+    
+
+
     if mesh is None:
         mesh = np.linspace(bins[0], bins[-1], 100000)
     else:
@@ -57,7 +61,7 @@ def fit_gaussian_density(
     if plot:
         plt.figure(figsize=(7, 4))
         plt.stairs(histo, bins, label="Histogram")
-        # plt.plot(mesh, fitted_line, 'r-', label="Gaussian Fit")
+        plt.plot(mesh, fitted_line, 'r-', label="Gaussian Fit")
         plt.title("Multi-Gaussian Fit to z-Distribution")
         plt.xlabel("z [m]")
         plt.ylabel("Density")
