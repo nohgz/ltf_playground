@@ -52,7 +52,7 @@ def gauss_un(z,sigma_z):
     return np.exp(-(z)**2/(2*sigma_z**2))
 
 
-@njit()
+@njit(cache=True)
 def gauss_sum(x,NGauss,xGauss,AmpGauss,SigGauss):
     #NGauss = len(xGauss)
     sum = np.zeros(np.size(x)) #.reshape([np.size(x),])
@@ -62,7 +62,7 @@ def gauss_sum(x,NGauss,xGauss,AmpGauss,SigGauss):
         normsum += AmpGauss[i]*np.sqrt(2*np.pi*SigGauss[i]**2)
     return sum/normsum
 
-@njit()
+@njit(cache=True)
 def lmd(z,params,xGauss,AmpGauss,SigGauss,deriv=False):
     NGauss = len(xGauss)
     sigma = SigGauss[0]
@@ -79,7 +79,7 @@ def lmd(z,params,xGauss,AmpGauss,SigGauss,deriv=False):
     #return fac*np.exp(-z**2/(2*sigma**2))
     return fac*gauss_sum(z,NGauss,xGauss,AmpGauss,SigGauss) #*flat(z,sigma)
 
-@njit()
+@njit(cache=True)
 def find_wake_mayes_images(s,R,phi,energy,N,H,xGauss,AmpGauss,SigGauss):
     sL = R*phi**3/24.0
 
@@ -103,7 +103,7 @@ def find_wake_mayes_images(s,R,phi,energy,N,H,xGauss,AmpGauss,SigGauss):
 
     return Keps0*sum
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def find_wake_mayes_ss(s,R,phi,energy,xGauss,AmpGauss,SigGauss):
     sL = R*phi**3/24.0
     k = 1/R
@@ -138,7 +138,7 @@ def find_wake_mayes_ss(s,R,phi,energy,xGauss,AmpGauss,SigGauss):
 
     return Keps0*sum
 
-@njit(fastmath=True)
+@njit(fastmath=True,cache=True)
 def find_wake_mayes(s,R,phi,energy,N,H,xGauss,AmpGauss,SigGauss):
     # Main CSR Wake
     eCSR = find_wake_mayes_ss(s,R,phi,energy,xGauss,AmpGauss,SigGauss)
@@ -146,7 +146,7 @@ def find_wake_mayes(s,R,phi,energy,N,H,xGauss,AmpGauss,SigGauss):
 
     return eCSR+eShld
 
-@njit(fastmath=True)
+@njit(fastmath=True,cache=True)
 def find_wake_def_shape(gap,z,Nimages,R,phi,energy,xGauss,AmpGauss,SigGauss):
 
     Wake = np.zeros(Nwake)
@@ -154,7 +154,7 @@ def find_wake_def_shape(gap,z,Nimages,R,phi,energy,xGauss,AmpGauss,SigGauss):
         Wake[i] = find_wake_mayes(z[i],R,phi,energy,Nimages,gap,xGauss,AmpGauss,SigGauss)
     return Wake
 
-@njit(fastmath=True,parallel=True)
+@njit(fastmath=True,parallel=True,cache=True)
 def evolve_distribution(gap,z,beam_charge,Nwake,Nimages,R,phi,energy,xGauss,AmpGauss,SigGauss):
     Ns = len(phi)
     ds = R*(phi[1]-phi[0])

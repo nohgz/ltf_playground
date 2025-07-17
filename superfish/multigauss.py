@@ -45,10 +45,11 @@ def fit_gaussian_density(
 
         xGauss[i] = (bins[idx] + bins[idx+1]) / 2
         ampGauss[i] = histo[idx]
+        print(width)
         fitted_line += ampGauss[i] * np.exp(-(mesh - xGauss[i]) ** 2 / (2 * width**2))
         normsum += ampGauss[i] * (width * np.sqrt(2 * np.pi))
 
-    # Normalize and scale by desired factor (e.g., charge)
+    # normalize and scale by any factor
     ampGauss = (ampGauss / normsum) * scale
     fitted_line *= (scale / normsum)
     histo *= scale
@@ -56,7 +57,7 @@ def fit_gaussian_density(
     if plot:
         plt.figure(figsize=(7, 4))
         plt.stairs(histo, bins, label="Histogram")
-        plt.plot(mesh, fitted_line, 'r-', label="Gaussian Fit")
+        # plt.plot(mesh, fitted_line, 'r-', label="Gaussian Fit")
         plt.title("Multi-Gaussian Fit to z-Distribution")
         plt.xlabel("z [m]")
         plt.ylabel("Density")
@@ -69,6 +70,7 @@ def fit_gaussian_density(
 
 @jit(nopython=True, fastmath=True)
 def _gauss_sum(z, NGauss, xGauss, ampGauss, sigGauss):
+    # PUT NORMSUM BACK IN THIS
     sum = 0.0
     for i in range(NGauss):
         sum += ampGauss[i] * np.exp(-((z - xGauss[i]) ** 2) / (2 * sigGauss[i] ** 2))

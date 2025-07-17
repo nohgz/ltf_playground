@@ -67,6 +67,8 @@ mpi_wake_end = ends[mpi_rank]
 print(f"RANK: {mpi_rank} WAKE PART: {mpi_wake_start}-{mpi_wake_end}")
 # *** END MPI STUFF ***
 
+
+# also doesn't seem to be used
 def flat(z,sigma_z):
     norm = 2*(2*sigma_z/np.pi) + 4*sigma_z
     Rise = (np.heaviside(z+3*sigma_z,0) - np.heaviside(2.0*sigma_z+z,1))*np.sin(abs(np.pi/2*(z+3*sigma_z)/(sigma_z)))
@@ -75,11 +77,14 @@ def flat(z,sigma_z):
 
     return (Rise + Flat + Fall)
 
-def gauss_un(z,sigma_z):
-    return np.exp(-(z)**2/(2*sigma_z**2))
+
+# doesn't seem to be used
+# @njit(cache=True)
+# def gauss_un(z,sigma_z):
+#     return np.exp(-(z)**2/(2*sigma_z**2))
 
 
-@njit()
+@njit(cache=True)
 def gauss_sum(x,NGauss,xGauss,AmpGauss,SigGauss):
     #NGauss = len(xGauss)
     sum = np.zeros(np.size(x)) #.reshape([np.size(x),])
@@ -89,7 +94,7 @@ def gauss_sum(x,NGauss,xGauss,AmpGauss,SigGauss):
         normsum += AmpGauss[i]*np.sqrt(2*np.pi*SigGauss[i]**2)
     return sum/normsum
 
-@njit()
+@njit(cache=True)
 def lmd(z,params,xGauss,AmpGauss,SigGauss,deriv=False):
     NGauss = len(xGauss)
     sigma = SigGauss[0]
@@ -106,7 +111,7 @@ def lmd(z,params,xGauss,AmpGauss,SigGauss,deriv=False):
     #return fac*np.exp(-z**2/(2*sigma**2))
     return fac*gauss_sum(z,NGauss,xGauss,AmpGauss,SigGauss) #*flat(z,sigma)
 
-@njit()
+@njit(cache=True)
 def find_wake_mayes_images(s,R,phi,energy,N,H,xGauss,AmpGauss,SigGauss):
     sL = R*phi**3/24.0
 
@@ -130,7 +135,7 @@ def find_wake_mayes_images(s,R,phi,energy,N,H,xGauss,AmpGauss,SigGauss):
 
     return Keps0*sum
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def find_wake_mayes_ss(s,R,phi,energy,xGauss,AmpGauss,SigGauss):
 
     sL = R*phi**3/24.0
@@ -185,7 +190,6 @@ def find_wake_def_shape_local(gap, z, Nimages, R, phi, energy, xGauss, AmpGauss,
         )
     return Wake_local
 
-
 def evolve_distribution(
     gap, z, beam_charge, Nwake, Nimages, R, phi, energy,
     xGauss, AmpGauss, SigGauss):
@@ -225,7 +229,7 @@ def evolve_distribution(
     return energies
 
 def worker_loop(problem):
-    z = np.linspace(-5 * problem.sigma, 5 * problem.sigma, problem.Nwake) #nwake might be a prob for memory and whatnot (maybe even worse)
+    z = np.linspace(-5 * problem.sigma, 5 * problem.sigma, problem.Nwake)
     while True:
         data = mpi_comm.bcast(None, root=0)
         if data == "STOP":
@@ -306,9 +310,7 @@ class CSROptProblem(ElementwiseProblem):
             out["F"] = np.sqrt(np.sum((energies - mean)**2 * 0.5*(Lmd[1:] + Lmd[:-1]) * (z[1] - z[0])))
 
             # print(f"Rank 0 evaluate time {time.time() - starttime:.2f} s")
-        else:
-            # other ranks GO AWAY 0 is the only cool one
-            pass
+        # other ranks GO AWAY 0 is the only cool one
 
 
 
@@ -360,6 +362,6 @@ if __name__ == "__main__":
             pickle.dump(res, f)
 
     else:
-        # Other ranks do
+        # Other ranks do their own thing (which is wait for instruction from 0)
         worker_loop(problem)
         pass

@@ -333,7 +333,7 @@ def routine(
 
     # i think this magic number works best for determining particle spread
     # based only on a given bunch length for the lab
-    sig_pos = bunch_conf.LENGTH / 14
+    sig_pos = bunch_conf.LENGTH / 5.65
 
     if bunch_conf.SPECIES[0].lower == "e":
         log("USING ELECTRONS")
@@ -377,7 +377,7 @@ def routine(
     lab_particle_pos = np.array([particle.get_3p()[0] for particle in parts])
 
     # get the velocity and position of the reference particle
-    lab_ref_vel = np.mean(lab_particle_vel, axis=0)[0]
+    lab_ref_vel = np.mean(lab_particle_vel, axis=0)
     lab_ref_pos = np.mean(lab_particle_pos, axis=0)
 
     # get the bunch length in the lab frame
@@ -621,10 +621,8 @@ def routine(
     flat_E_boosted = []
     flat_B_boosted = []
 
-    v_norm = norm(lab_ref_vel)
-
     for E_vec in flat_E:
-        E_tr, B_tr = fv.inverseFieldTransform(E_vec, np.zeros(3), v_norm)
+        E_tr, B_tr = fv.inverseFieldTransform(E_vec, np.zeros(3), lab_ref_vel)
         flat_E_boosted.append(E_tr)
         flat_B_boosted.append(B_tr)
 
@@ -746,13 +744,13 @@ if __name__ == "__main__":
     bunch_config = dict(
         # change the particles to be macroparticles. i.e. define bunch charge and then
         # scale it according to num particles (q = bunchCharge/N)
-        NUM_PARTICLES = 5,
+        NUM_PARTICLES = 5000,
         SPECIES = "Electron",    # can be "Electron" or "Proton"
         MU_VEL = 2.6E8, #m/s
         SIG_VEL = 5E6,  #m/s
         DISTRIBUTION = "Gaussian", # can be "Uniform", "Mesa", or "Gaussian"
-        RADIUS = 0.02097928077291609, # meters
-        LENGTH = 0.003631584759359322,
+        RADIUS = 0.00023410011151055646, # meters
+        LENGTH = 2.6501100765693437e-05, #stdev * 6
         CHARGE = -1e-08
     )
 

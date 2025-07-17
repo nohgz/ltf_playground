@@ -118,8 +118,10 @@ def _jit_integrate(
 
     # Scale factor
     if is_trapezoid:
+        # THERE SHOULD ALSO BE A BUNCH CHARGE MULTIPLIER
         factor = 0.125 * COULOMB_K * ds * dz * dphi
     else:
+        # THERE SHOULD ALSO BE A BUNCH CHARGE MULTIPLIER
         factor = 0.125 * COULOMB_K * (b_s - a_s) * (b_z - a_z) * (b_phi - a_phi)
 
     return factor * result
