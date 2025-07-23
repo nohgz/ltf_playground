@@ -28,10 +28,10 @@ collected_data = {}
 
 @dataclass
 class MainConfig:
+    DEBUG: bool
     INTEGRATOR: str
     SHOW_GAUSSIAN_FIT: bool
     SHOW_MESH: bool
-    SAVE_PLOTS: bool
     OUT_PATH: str
     SEED_RNG: bool
 
@@ -210,7 +210,6 @@ def routine(
             mass_override=parts[i].m,
             charge_override=parts[i].q
         ))
-    print(f"BIGDAVE (3v of a rand part): {alt_parts[2].get_3v()}")
 
     # get the velocities and positions of each particle
     lab_particle_vel = np.array([particle.get_3v() for particle in alt_parts])
@@ -220,7 +219,17 @@ def routine(
     lab_ref_vel = fv.to_three_velocity(alt_parts[0].vel_4v)
     lab_ref_pos = lab_particle_pos[0]
 
-    print(f"labvel {lab_ref_vel}, labpos {lab_ref_pos}")
+    if main_conf.DEBUG:
+        print(f"sample 3v: {alt_parts[2].get_3v()}")
+        print(f"lab_ref_vel: {lab_ref_vel}, lab_ref_pos {lab_ref_pos}")
+        print(f"γ (gamma): {fv.gamma_3v(lab_ref_vel)}")
+
+        # try to get the total charge
+        tot_charge = 0.0
+        for particle in alt_parts:
+            tot_charge += particle.charge
+
+        print(f"total charge: {tot_charge}")
 
     # get the bunch length in the lab frame
     lab_bunch_len = max(lab_particle_pos[:,2]) - min(lab_particle_pos[:,2])
@@ -228,7 +237,7 @@ def routine(
 
     # create reference particle
     reference = BunchParticle(Reference, v0_3v = lab_ref_vel, pos0_3v = lab_ref_pos)
-    # print(f"GAMMA --> {fv.gamma_3v(lab_ref_vel)}")
+
     ###
     # STEP 2: Lorentz boost to the reference particle's frame
     ###
@@ -247,8 +256,6 @@ def routine(
     com_bunch_len = max(com_particle_pos[:,2]) - min(com_particle_pos[:,2])
     com_radii = np.sqrt(com_particle_pos[:,0]**2 + com_particle_pos[:,1]**2)
 
-    # print(f"combunchlencalc --> {max(com_particle_pos[:,2])} - {min(com_particle_pos[:,2])} = {com_bunch_len}")
-
     # RMS radius
     bunch_rad_rms = np.sqrt(np.mean(com_radii**2))
 
@@ -258,8 +265,10 @@ def routine(
     #FIXME: TEMPORARY TESTING
     bunch_rad_rms = bunch_rad_max
 
-    # print(f"Bunch RMS radius: {bunch_rad_rms}")
-    print(f"Bunch Max radius: {bunch_rad_max}")
+    if main_conf.DEBUG:
+        print(f"! Reference Particle Position: {reference.get_3p()}")
+        print(f"Bunch RMS radius: {bunch_rad_rms}")
+        print(f"Bunch Max radius: {bunch_rad_max}")
 
     ###
     # STEP 3: Bin the distribution of particles in the Lorentz-boosted frame
@@ -267,18 +276,19 @@ def routine(
 
     # attempt to auto infer gaussian width based on bunch length
     if gauss_conf.WIDTH_GAUSSIANS == -1:
-        gauss_conf.WIDTH_GAUSSIANS = 2 * com_bunch_len / gauss_conf.NUM_BINS
+        gauss_conf.WIDTH_GAUSSIANS = com_bunch_len / gauss_conf.NUM_BINS
 
-    print(f"FIT PARAMS \n BINS: {gauss_conf.NUM_BINS} \n NGAUS: {gauss_conf.NUM_GAUSSIANS}\
-          \n WIDTH: {gauss_conf.WIDTH_GAUSSIANS} \n SCALE: {parts[0].q}")
+    if main_conf.DEBUG:
+        print(f"FIT PARAMS \n BINS: {gauss_conf.NUM_BINS} \n NGAUS: {gauss_conf.NUM_GAUSSIANS}\
+          \n WIDTH: {gauss_conf.WIDTH_GAUSSIANS} \n SCALE: {len(parts) * parts[0].q}")
 
     xGauss, ampGauss, sigGauss = mg.fit_gaussian_density(
-        com_particle_pos[:,2],
+        z_array=com_particle_pos[:,2],
         nbins=gauss_conf.NUM_BINS,
         ngaussians=gauss_conf.NUM_GAUSSIANS,
         width=gauss_conf.WIDTH_GAUSSIANS,
         plot=main_conf.SHOW_GAUSSIAN_FIT,
-        scale=len(parts) * parts[0].q) #charge of ref particle, assume uniform beam
+        scale=len(parts) * parts[0].q) # charge of beam
 
     ###
     # STEP 4: Obtain the Longitudinal & Transverse Electric fields
@@ -325,32 +335,33 @@ def routine(
     )
 
     # EXTRA PLOTTING
-    idx = closestVal(bunch_rad_rms, com_x_mesh)
-    idy = closestVal(0, com_y_mesh)
-    idz = closestVal(0, com_z_mesh)
+    if main_conf.DEBUG:
+        idx = closestVal(bunch_rad_rms, com_x_mesh)
+        idy = closestVal(0, com_y_mesh)
+        idz = closestVal(0, com_z_mesh)
 
-    fig, axs = plt.subplots(1,2, figsize=(14, 5))
+        fig, axs = plt.subplots(1,2, figsize=(14, 5))
 
-    # Radial Efld
-    axs[0].grid()
-    axs[0].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
-    axs[0].plot(com_z_mesh, com_efld_cyl[idx, idy, :][:, 0], '.-', label="Radial Electric Field")
-    axs[0].set_xlabel("Longitudinal Distance $z$ (m)")
-    axs[0].set_ylabel("Electric Field Magnitude (V/m)")
-    axs[0].set_title(f"Radial Electric Field ($n$ = {mesh_conf.QUAD_PTS}) (Co. Frame)")
-    axs[0].legend()
+        # Radial Efld
+        axs[0].grid()
+        axs[0].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
+        axs[0].plot(com_z_mesh, com_efld_cyl[idx, idy, :][:, 0], '.-', label="Radial Electric Field")
+        axs[0].set_xlabel("Longitudinal Distance $z$ (m)")
+        axs[0].set_ylabel("Electric Field Magnitude (V/m)")
+        axs[0].set_title(f"Radial Electric Field ($n$ = {mesh_conf.QUAD_PTS}) (Co. Frame)")
+        axs[0].legend()
 
-    # Longitudinal Efld
-    axs[1].grid(True)
-    axs[1].plot(com_z_mesh, com_efld_cyl[idx, idy, :][:,2], '.-', label="Longitudinal Electric Field")
-    axs[1].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
-    axs[1].set_xlabel("Longitudinal Distance $z$ (m)")
-    axs[1].set_ylabel("Electric Field Magnitude (V/m)")
-    axs[1].set_title(f"Longitudinal Electric Field ($n$ = {mesh_conf.QUAD_PTS}) (Co. Frame)")
-    axs[1].legend()
+        # Longitudinal Efld
+        axs[1].grid(True)
+        axs[1].plot(com_z_mesh, com_efld_cyl[idx, idy, :][:,2], '.-', label="Longitudinal Electric Field")
+        axs[1].axvspan(-lab_bunch_len/2, lab_bunch_len/2, alpha=0.2, label='Lab Bunch Length')
+        axs[1].set_xlabel("Longitudinal Distance $z$ (m)")
+        axs[1].set_ylabel("Electric Field Magnitude (V/m)")
+        axs[1].set_title(f"Longitudinal Electric Field ($n$ = {mesh_conf.QUAD_PTS}) (Co. Frame)")
+        axs[1].legend()
 
-    plt.tight_layout()
-    plt.show()
+        plt.tight_layout()
+        plt.show()
 
     ###
     # Step 6: Convert the fields in the reference particle frame to cartesian,
@@ -384,11 +395,8 @@ def routine(
 
     Ez_interp = RegularGridInterpolator(
         (com_x_mesh, com_y_mesh, com_z_mesh),
-        com_efld_cart[...,2]\
+        com_efld_cart[...,2]
     )
-
-    # print("commpartpos", com_particle_pos)
-    # print(f"z mesh (max,min) -> ({max(com_z_mesh)}, {min(com_z_mesh)})")
 
     # Evaluate E-field in comoving frame at particle positions
     E_com_at_particles = np.stack([
@@ -396,8 +404,6 @@ def routine(
         Ey_interp(com_particle_pos),
         Ez_interp(com_particle_pos)
     ], axis=1)
-
-    # print("PB.shape", E_com_at_particles.shape)
 
     # Lorentz transform each field vector to lab frame
     lab_E_at_particles = []
@@ -411,9 +417,7 @@ def routine(
     lab_E_at_particles = np.array(lab_E_at_particles)
     lab_B_at_particles = np.array(lab_B_at_particles)
 
-    # print(lab_E_at_particles)
-    # print(lab_B_at_particles)
-
-    print("[ CYCLE DONE ] \n \n")
+    if main_conf.DEBUG:
+        print("[ CYCLE DONE ] \n \n")
 
     return lab_E_at_particles, lab_B_at_particles

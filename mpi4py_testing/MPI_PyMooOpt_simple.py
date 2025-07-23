@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import time
 import os
 from mpi4py import MPI
+import numba_mpi as nbMPI
 from pymoo.core.problem import ElementwiseProblem, StarmapParallelization
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.algorithms.soo.nonconvex.isres import ISRES
@@ -35,7 +36,7 @@ shldmax = 0.1
 shldgap = 1e-2
 Nimages = 0
 NGauss = 32 # num of gaussians to discretize profile (mod this)
-Nwake = 101 # num of pts in the comoving mesh
+Nwake = 100 # num of pts in the comoving mesh
 sigma_z = 300e-6 #2e-3/6 #300e-6
 m = 9.1e-31
 c = 3e8
@@ -44,17 +45,21 @@ Nbins = 50
 sigmax = sigma_z # the sigma of each gaussian (mod this)
 sigma = sigma_z
 
+STOP_CODE = -999.14
 
 # *** MPI STUFF ***
-mpi_comm = MPI.COMM_WORLD
-mpi_rank = mpi_comm.Get_rank()
-mpi_size = mpi_comm.Get_size()
+mpi_rank = nbMPI.rank()
+mpi_size = nbMPI.size()
 
 # This stuff is used in find_wake_def_shape_local
 workloads = [Nwake // mpi_size for i in range(mpi_size)]
 
+
 for i in range(Nwake % mpi_size):
     workloads[i] += 1
+
+if mpi_rank == 0:
+    print(mpi_size, workloads)
 
 starts = [0]
 for w in workloads[:-1]:
@@ -190,6 +195,7 @@ def find_wake_def_shape_local(gap, z, Nimages, R, phi, energy, xGauss, AmpGauss,
         )
     return Wake_local
 
+# @njit()
 def evolve_distribution(
     gap, z, beam_charge, Nwake, Nimages, R, phi, energy,
     xGauss, AmpGauss, SigGauss):
@@ -198,8 +204,15 @@ def evolve_distribution(
     energies = np.zeros(Nwake - 1)
 
     for i in range(1, Ns):
+        send_buf = np.empty(1 + 2*NGauss, dtype=np.float64)
+
+        # pack it into a 1-D buffer
+        send_buf[0] = phi[i-1]
+        send_buf[1:1+NGauss] = AmpGauss
+        send_buf[1+NGauss:] = SigGauss
+
         # Broadcast phi + profile to all ranks
-        mpi_comm.bcast((phi[i-1], AmpGauss, SigGauss), root=0)
+        nbMPI.bcast(send_buf, root=0)
 
         # Rank 0 computes its own chunk
         Wake_local = find_wake_def_shape_local(
@@ -214,42 +227,71 @@ def evolve_distribution(
             SigGauss=SigGauss
         )
 
+        print(f"RANK0 LBUFSIZE{Wake_local.size}")
+
         # Gather wake chunks from all ranks
-        gathered = mpi_comm.gather(Wake_local, root=0)
+        # size = total number of ranks
+        recv_buf = np.empty((mpi_size, len(Wake_local)), dtype=np.float64)
+        nbMPI.gather(Wake_local, recv_buf, count=len(Wake_local), root=0)
+
+        # if mpi_rank == 0:
+        #     print(recv_buf)
 
         wake = np.zeros(Nwake)
         idx = 0
-        for chunk in gathered:
+        print(f"PASS THIS")
+
+        print(f"recv_buf:{recv_buf}")
+
+        for chunk in recv_buf:
             wake[idx:idx+len(chunk)] = chunk
             idx += len(chunk)
 
-        # Accumulate energy
+        print(f"oh no :(")
+
         energies += 0.5 * (wake[1:] + wake[:-1]) * ds * beam_charge / 1e6
 
     return energies
 
+# can't really jit this guy because it uses the problem class.
+# it gets upset if i try to use it
+
+#might be worth it to get rid of the class stuff as a whole so I can JIT it
+
+
 def worker_loop(problem):
+    if mpi_rank == 0:
+        print("Rank 0 must not be a worker! D:<")
+
+    no_buf = np.empty(1, dtype=np.float64) # acts like None
+    recv_buf = np.empty(1+2*NGauss, dtype=np.float64)
     z = np.linspace(-5 * problem.sigma, 5 * problem.sigma, problem.Nwake)
+
     while True:
-        data = mpi_comm.bcast(None, root=0)
-        if data == "STOP":
+        nbMPI.bcast(recv_buf, root=0)
+
+        if recv_buf[0] == STOP_CODE:
+            print(f"RANK: {mpi_rank} ALL DONE!")
             break
 
-        phi_i, AmpGauss, SigGauss = data
+        phi_val = recv_buf[0]
+        AmpGauss = recv_buf[1:1+NGauss].copy()
+        SigGauss = recv_buf[1+NGauss:].copy()
 
         Wake_local = find_wake_def_shape_local(
             gap=shldgap,
             z=z,
             Nimages=Nimages,
             R=problem.R,
-            phi=phi_i,
-            energy=problem.energy,
-            xGauss=problem.xGauss,
-            AmpGauss=AmpGauss,
-            SigGauss=SigGauss
+            phi=phi_val,
+            energy=problem.energy, # this is global might be able to change
+            xGauss=problem.xGauss, # might be able to alienate this guy from problem
+            AmpGauss=AmpGauss,     # could do a similar thing here
+            SigGauss=SigGauss      # and here
         )
 
-        mpi_comm.gather(Wake_local, root=0)
+        print(f"RANK {mpi_rank}, WAKELOCALSIZE {Wake_local.size}")
+        nbMPI.gather(Wake_local, no_buf, count=len(Wake_local), root=0)
 
 
 class CSROptProblem(ElementwiseProblem):
@@ -277,8 +319,6 @@ class CSROptProblem(ElementwiseProblem):
 
     def _evaluate(self, x, out, *args, **kwargs):
         if mpi_rank == 0:
-            starttime = time.time()
-
             self.AmpGauss = np.array(x[:self.NGauss])
             self.SigGauss = self.SigLim * np.ones(self.NGauss)
             z = np.linspace(-5*self.sigma, 5*self.sigma, self.Nwake)
@@ -309,7 +349,6 @@ class CSROptProblem(ElementwiseProblem):
             mean = np.sum(energies * 0.5*(Lmd[1:] + Lmd[:-1]) * (z[1] - z[0]))
             out["F"] = np.sqrt(np.sum((energies - mean)**2 * 0.5*(Lmd[1:] + Lmd[:-1]) * (z[1] - z[0])))
 
-            # print(f"Rank 0 evaluate time {time.time() - starttime:.2f} s")
         # other ranks GO AWAY 0 is the only cool one
 
 
@@ -343,7 +382,7 @@ termination = get_termination("n_gen", 8) # could relax to 100
 if __name__ == "__main__":
     if mpi_rank == 0:
 
-        starttime = MPI.Wtime()
+        starttime = nbMPI.wtime()
         res = minimize(
             problem,
             algorithm,
@@ -353,8 +392,8 @@ if __name__ == "__main__":
             verbose=True
         )
         # After optimizer is done, send STOP
-        mpi_comm.bcast("STOP", root=0)
-        endtime = MPI.Wtime()
+        nbMPI.bcast(np.array([STOP_CODE], dtype=np.float64), root=0)
+        endtime = nbMPI.wtime()
 
         print(f"TIME: {endtime-starttime}")
 

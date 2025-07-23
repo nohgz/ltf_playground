@@ -24,14 +24,12 @@ def fit_gaussian_density(
     # Histogram particle positions
     histo, bins = np.histogram(z_array, bins=nbins, density=True)
 
-    print("HISTO & BINS", histo, bins)
-    
-
-
     if mesh is None:
         mesh = np.linspace(bins[0], bins[-1], 100000)
     else:
         _assert_mesh_clean(mesh)
+
+    # print(f"MY SCALE IS: {scale}")
 
     bin_width = bins[1] - bins[0]
     guesses = np.linspace(bins[1], bins[-2], ngaussians)
@@ -49,7 +47,6 @@ def fit_gaussian_density(
 
         xGauss[i] = (bins[idx] + bins[idx+1]) / 2
         ampGauss[i] = histo[idx]
-        print(width)
         fitted_line += ampGauss[i] * np.exp(-(mesh - xGauss[i]) ** 2 / (2 * width**2))
         normsum += ampGauss[i] * (width * np.sqrt(2 * np.pi))
 
@@ -62,13 +59,16 @@ def fit_gaussian_density(
         plt.figure(figsize=(7, 4))
         plt.stairs(histo, bins, label="Histogram")
         plt.plot(mesh, fitted_line, 'r-', label="Gaussian Fit")
-        plt.title("Multi-Gaussian Fit to z-Distribution")
-        plt.xlabel("z [m]")
-        plt.ylabel("Density")
+        plt.title("Charge Density [$C$]")
+        plt.xlabel("z [$m$]")
+        plt.ylabel("Charge Density")
         plt.legend()
         plt.grid()
         plt.tight_layout()
         plt.show()
+
+    # total_charge = np.trapz(fitted_line, mesh)
+    # print(f"Total charge = {total_charge} C, SCALE = {scale}")
 
     return xGauss, ampGauss, sigGauss
 

@@ -35,7 +35,7 @@ shldmax = 0.1
 shldgap = 1e-2
 Nimages = 0
 NGauss = 32 # num of gaussians to discretize profile (mod this)
-Nwake = 101 # num of pts in the comoving mesh
+Nwake = 100 # num of pts in the comoving mesh
 sigma_z = 300e-6 #2e-3/6 #300e-6
 m = 9.1e-31
 c = 3e8
@@ -51,19 +51,18 @@ mpi_rank = mpi_comm.Get_rank()
 mpi_size = mpi_comm.Get_size()
 
 # This stuff is used in find_wake_def_shape_local
-workloads = [Nwake // (mpi_size - 1) for i in range(mpi_size - 1)]
-for i in range(Nwake % (mpi_size - 1)):
+workloads = [Nwake // mpi_size for i in range(mpi_size)]
+
+for i in range(Nwake % mpi_size):
     workloads[i] += 1
+
 starts = [0]
 for w in workloads[:-1]:
     starts.append(starts[-1]+w)
 ends = [s+w for s,w in zip(starts, workloads)]
 
-if mpi_rank > 0:
-    mpi_wake_start = starts[mpi_rank - 1]
-    mpi_wake_end = ends[mpi_rank - 1]
-else:
-    mpi_wake_start = mpi_wake_end = 0
+mpi_wake_start = starts[mpi_rank]
+mpi_wake_end = ends[mpi_rank]
 
 print(f"RANK: {mpi_rank} WAKE PART: {mpi_wake_start}-{mpi_wake_end}")
 # *** END MPI STUFF ***
@@ -203,31 +202,26 @@ def evolve_distribution(
         mpi_comm.bcast((phi[i-1], AmpGauss, SigGauss), root=0)
 
         # Rank 0 computes its own chunk
-        if mpi_rank == 0:
-            Wake_local = None
-        else:
-            Wake_local = find_wake_def_shape_local(
-                gap=gap,
-                z=z,
-                Nimages=Nimages,
-                R=R,
-                phi=phi[i-1],
-                energy=energy,
-                xGauss=xGauss,
-                AmpGauss=AmpGauss,
-                SigGauss=SigGauss
-            )
+        Wake_local = find_wake_def_shape_local(
+            gap=gap,
+            z=z,
+            Nimages=Nimages,
+            R=R,
+            phi=phi[i-1],
+            energy=energy,
+            xGauss=xGauss,
+            AmpGauss=AmpGauss,
+            SigGauss=SigGauss
+        )
 
         # Gather wake chunks from all ranks
         gathered = mpi_comm.gather(Wake_local, root=0)
 
         wake = np.zeros(Nwake)
         idx = 0
-        for rank_chunk in gathered:
-            if rank_chunk is None:
-                continue
-            wake[idx : idx + len(rank_chunk)] = rank_chunk
-            idx += len(rank_chunk)
+        for chunk in gathered:
+            wake[idx:idx+len(chunk)] = chunk
+            idx += len(chunk)
 
         # Accumulate energy
         energies += 0.5 * (wake[1:] + wake[:-1]) * ds * beam_charge / 1e6
