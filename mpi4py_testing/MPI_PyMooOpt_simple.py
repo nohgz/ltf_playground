@@ -36,7 +36,7 @@ shldmax = 0.1
 shldgap = 1e-2
 Nimages = 0
 NGauss = 32 # num of gaussians to discretize profile (mod this)
-Nwake = 100 # num of pts in the comoving mesh
+Nwake = 101 # num of pts in the comoving mesh
 sigma_z = 300e-6 #2e-3/6 #300e-6
 m = 9.1e-31
 c = 3e8
@@ -195,21 +195,24 @@ def find_wake_def_shape_local(gap, z, Nimages, R, phi, energy, xGauss, AmpGauss,
         )
     return Wake_local
 
-# @njit()
+@njit()
 def evolve_distribution(
     gap, z, beam_charge, Nwake, Nimages, R, phi, energy,
     xGauss, AmpGauss, SigGauss):
+    assert mpi_rank == 0, "only rank 0 allowed!"
+
+
     Ns = len(phi)
+    # DO NOT PARALLELIZE PHI EVER BRO IT WORKS IN 1-D BUT MIGHT NOT WORK IN 3-D
     ds = R * (phi[1] - phi[0])
     energies = np.zeros(Nwake - 1)
 
     for i in range(1, Ns):
-        send_buf = np.empty(1 + 2*NGauss, dtype=np.float64)
+        send_buf = np.empty(1 + NGauss, dtype=np.float64)
 
         # pack it into a 1-D buffer
         send_buf[0] = phi[i-1]
-        send_buf[1:1+NGauss] = AmpGauss
-        send_buf[1+NGauss:] = SigGauss
+        send_buf[1:1+NGauss] = AmpGauss #TODO: Perhaps one broadcast of AmpGauss? can be done to save some chatter-time
 
         # Broadcast phi + profile to all ranks
         nbMPI.bcast(send_buf, root=0)
@@ -227,11 +230,10 @@ def evolve_distribution(
             SigGauss=SigGauss
         )
 
-        print(f"RANK0 LBUFSIZE{Wake_local.size}")
-
+        print("LWL:", len(Wake_local))
         # Gather wake chunks from all ranks
         # size = total number of ranks
-        recv_buf = np.empty((mpi_size, len(Wake_local)), dtype=np.float64)
+        recv_buf = np.zeros((mpi_size, len(Wake_local)), dtype=np.float64)
         nbMPI.gather(Wake_local, recv_buf, count=len(Wake_local), root=0)
 
         # if mpi_rank == 0:
@@ -239,58 +241,46 @@ def evolve_distribution(
 
         wake = np.zeros(Nwake)
         idx = 0
-        print(f"PASS THIS")
-
-        print(f"recv_buf:{recv_buf}")
 
         for chunk in recv_buf:
+            print(chunk)
             wake[idx:idx+len(chunk)] = chunk
             idx += len(chunk)
-
-        print(f"oh no :(")
 
         energies += 0.5 * (wake[1:] + wake[:-1]) * ds * beam_charge / 1e6
 
     return energies
 
-# can't really jit this guy because it uses the problem class.
-# it gets upset if i try to use it
-
-#might be worth it to get rid of the class stuff as a whole so I can JIT it
-
-
-def worker_loop(problem):
+@njit
+def worker_loop():
     if mpi_rank == 0:
         print("Rank 0 must not be a worker! D:<")
 
     no_buf = np.empty(1, dtype=np.float64) # acts like None
     recv_buf = np.empty(1+2*NGauss, dtype=np.float64)
-    z = np.linspace(-5 * problem.sigma, 5 * problem.sigma, problem.Nwake)
 
     while True:
         nbMPI.bcast(recv_buf, root=0)
 
         if recv_buf[0] == STOP_CODE:
-            print(f"RANK: {mpi_rank} ALL DONE!")
             break
 
         phi_val = recv_buf[0]
         AmpGauss = recv_buf[1:1+NGauss].copy()
-        SigGauss = recv_buf[1+NGauss:].copy()
 
         Wake_local = find_wake_def_shape_local(
             gap=shldgap,
-            z=z,
+            z=g_z,
             Nimages=Nimages,
-            R=problem.R,
+            R=R,
             phi=phi_val,
-            energy=problem.energy, # this is global might be able to change
-            xGauss=problem.xGauss, # might be able to alienate this guy from problem
-            AmpGauss=AmpGauss,     # could do a similar thing here
-            SigGauss=SigGauss      # and here
+            energy=energy,
+            xGauss=g_xGauss,
+            AmpGauss=AmpGauss,
+            SigGauss=g_sigGauss
         )
 
-        print(f"RANK {mpi_rank}, WAKELOCALSIZE {Wake_local.size}")
+        print("NEH",Wake_local.shape)
         nbMPI.gather(Wake_local, no_buf, count=len(Wake_local), root=0)
 
 
@@ -316,11 +306,11 @@ class CSROptProblem(ElementwiseProblem):
         self.Nwake = Nwake
         self.energy = energy
         self.SigLim = SigLim
+        self.SigGauss = self.SigLim * np.ones(self.NGauss)
 
     def _evaluate(self, x, out, *args, **kwargs):
         if mpi_rank == 0:
             self.AmpGauss = np.array(x[:self.NGauss])
-            self.SigGauss = self.SigLim * np.ones(self.NGauss)
             z = np.linspace(-5*self.sigma, 5*self.sigma, self.Nwake)
 
             Lmd = lmd(
@@ -349,11 +339,12 @@ class CSROptProblem(ElementwiseProblem):
             mean = np.sum(energies * 0.5*(Lmd[1:] + Lmd[:-1]) * (z[1] - z[0]))
             out["F"] = np.sqrt(np.sum((energies - mean)**2 * 0.5*(Lmd[1:] + Lmd[:-1]) * (z[1] - z[0])))
 
-        # other ranks GO AWAY 0 is the only cool one
-
-
-
 problem = CSROptProblem(beam_charge,sigma_z,energy,R,phi,shldmin,shldmax,NGauss,[1e-3,1.0],sigmax,Nwake)
+
+# define some globals for the MPI stuff
+g_xGauss = problem.xGauss
+g_sigGauss = problem.SigGauss
+g_z = np.linspace(-5 * problem.sigma, 5 * problem.sigma, problem.Nwake)
 
 #algorithm = NSGA2( # params of genetic algo
 #    pop_size=100,
@@ -402,5 +393,5 @@ if __name__ == "__main__":
 
     else:
         # Other ranks do their own thing (which is wait for instruction from 0)
-        worker_loop(problem)
+        worker_loop()
         pass

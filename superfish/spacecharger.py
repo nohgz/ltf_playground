@@ -229,7 +229,7 @@ def routine(
         for particle in alt_parts:
             tot_charge += particle.charge
 
-        print(f"total charge: {tot_charge}")
+        print(f"total particle charge: {tot_charge}")
 
     # get the bunch length in the lab frame
     lab_bunch_len = max(lab_particle_pos[:,2]) - min(lab_particle_pos[:,2])
@@ -288,7 +288,7 @@ def routine(
         ngaussians=gauss_conf.NUM_GAUSSIANS,
         width=gauss_conf.WIDTH_GAUSSIANS,
         plot=main_conf.SHOW_GAUSSIAN_FIT,
-        scale=len(parts) * parts[0].q) # charge of beam
+        scale=1) # charge of beam
 
     ###
     # STEP 4: Obtain the Longitudinal & Transverse Electric fields
@@ -408,6 +408,9 @@ def routine(
     # Lorentz transform each field vector to lab frame
     lab_E_at_particles = []
     lab_B_at_particles = []
+
+    print("parts[0].q", alt_parts[0].charge, "  len(alt)", len(alt_parts))
+
 
     for E_com in E_com_at_particles:
         E_lab, B_lab = fv.inverseFieldTransform(E_com, np.zeros(3), lab_ref_vel)

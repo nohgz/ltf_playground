@@ -31,7 +31,7 @@ phi = np.linspace(0.01/180*np.pi,25/180*np.pi,40,endpoint=False)
 shldmin = 1e-2
 shldmax = 0.1
 NGauss = 32 # num of gaussians to discretize profile (mod this)
-Nwake = 101 # num of pts in the comoving mesh
+Nwake = 100 # num of pts in the comoving mesh
 sigma_z = 300e-6 #2e-3/6 #300e-6
 m = 9.1e-31
 c = 3e8
