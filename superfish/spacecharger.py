@@ -409,7 +409,7 @@ def routine(
     lab_E_at_particles = []
     lab_B_at_particles = []
 
-    print("parts[0].q", alt_parts[0].charge, "  len(alt)", len(alt_parts))
+    # print("parts[0].q", alt_parts[0].charge, "  len(alt)", len(alt_parts))
 
 
     for E_com in E_com_at_particles:
